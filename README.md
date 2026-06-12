@@ -19,19 +19,20 @@ At the core of the system is the **Adversarial Swarm Debate**:
 ## 🤝 Platform & Partner Stack Integrations
 
 ### 1. **Band.ai** (Core Agent Collaboration)
-Our swarm is orchestrating real-time communication directly over the **Band.ai REST SDK** platform with zero safety fallbacks:
+Our swarm orchestrates real-time communication directly over the **Band.ai REST SDK** platform:
 - **Identity & Registrations**: Registers Conductor, Coder, and Reviewer agents on the platform.
 - **Chat Rooms & Participants**: Dynamically instantiates review rooms and adds agent participants with distinct roles.
 - **Messages & Mentions**: Agents exchange context and code proposals using targeted `@mentions` (e.g., Coder mentioning Conductor, Reviewer mentioning Coder).
 - **Context Rehydration**: Reviewers query the Chat Context endpoint before running evaluations to load the latest history.
 - **Events**: Publishes custom chat error events to notify participants and human operators of deadlocks.
-- **Memories**: The Band.ai platform limits the Memory API (saving/listing memories) strictly to Enterprise plans, throwing a `403 Forbidden` exception on other tiers. To solve this limitation, we implemented a robust programmatic local fallback database (writing/reading to `mock_infrastructure/local_memories.json`) which is activated dynamically upon catching `403` exceptions or when `BAND_MEMORY_MODE=local` is set in `.env` configurations. This preserves semantic memories across debate rounds without crashing.
+- **Agent Reuse Mechanism**: Automatically detects the platform's 10-agent limit and reuses pre-registered agent credentials (loaded from environment variables) to prevent registration failures.
+- **Memories (Local Fallback)**: The Band.ai Memory API is limited to Enterprise plans, throwing `403 Forbidden` on Free/Pro tiers. We implemented a robust programmatic local fallback (writing/reading to `mock_infrastructure/local_memories.json`) which is activated dynamically upon catching `403` exceptions or when `BAND_MEMORY_MODE=local` is set in `.env`. This preserves semantic memories across debate rounds with zero crashes.
 
-### 2. **Featherless AI** (Sponsor Partner)
-To leverage specialized open-source models at scale, we route the **Auth & Fraud SME Reviewer Agent** to the `unsloth/Meta-Llama-3.1-70B-Instruct` model hosted on **Featherless AI's** serverless endpoint (`https://api.featherless.ai/v1`). It performs strict SQL syntax verification, RBAC checks, and schema validation.
+### 2. **Featherless AI** (Hackathon Sponsor Partner)
+To leverage specialized open-source models at scale, we route the **Auth & Fraud SME Reviewer Agent** to the `unsloth/Meta-Llama-3.1-70B-Instruct` model hosted on **Featherless AI's** serverless endpoint (`https://api.featherless.ai/v1`). It performs strict SQL syntax verification, RBAC checks, and schema validation. The Featherless AI integration ensures our adversarial pairing uses genuinely different model architectures (Llama 3.1 vs GPT-4o) to maximize review diversity.
 
-### 3. **AIML API** (Sponsor Partner)
-All other agents in the swarm (the Conductor Orchestrator, the Lead Coder, and the Cart SME Reviewer) are routed via the **AIML API** gateway (`https://api.aimlapi.com/v1`) using the `gpt-4o-mini` model.
+### 3. **AIML API** (Hackathon Sponsor Partner)
+All other agents in the swarm (the Conductor Orchestrator, the Lead Coder, and the Cart SME Reviewer) are routed via the **AIML API** gateway (`https://api.aimlapi.com/v1`) using the `gpt-4o-mini` model. By redirecting `OPENAI_BASE_URL` to the AIML API endpoint, we achieve seamless integration with the sponsor's infrastructure while maintaining standard OpenAI client compatibility.
 
 ---
 
@@ -40,62 +41,88 @@ All other agents in the swarm (the Conductor Orchestrator, the Lead Coder, and t
 Every file in the repository plays a precise role in the Domain-Driven Governance engine:
 
 ### ⚙️ Core Swarm & Backend
-- **[`src/swarm.py`](file:///c:/Users/vjbel/hacks/BOA/src/swarm.py)**: The async Swarm Orchestration library mapping python Agent classes to Band.ai REST SDK endpoints. It implements the **Agent Reuse Mechanism** (detecting if the workspace is near the 10-agent limit and reusing pre-registered credentials) and routes Auth SME reviews to Featherless AI.
-- **[`src/server.py`](file:///c:/Users/vjbel/hacks/BOA/src/server.py)**: A FastAPI server exposing REST endpoints to manage swarm state, events, manual HITL overrides, and logs. It feeds the web dashboard in real-time.
-- **[`src/governance.py`](file:///c:/Users/vjbel/hacks/BOA/src/governance.py)**: The deterministic compliance and validation engine:
-  - `parse_codeowners`: Parses CODEOWNERS directives and matches modified paths.
-  - `triage_pr`: Halts the auto-merge loop and forces state to `PENDING_HUMAN_APPROVAL` if high-stakes paths (like `/src/auth/` or `/src/billing/`) are touched.
-  - `ConsensusTracker`: Monitors rounds and flags a deadlock on the 3rd iteration.
-  - `verify_schema_compliance` / `verify_openapi_compliance`: Compares code blocks against Postgres schemas and OpenAPI endpoints (acting as static MCP checks).
-  - `TelemetryScanner`: Log stream watchdog parser scanning for memory leaks and database connection pool exhaustion.
-- **[`src/githooks/compliance_hook.py`](file:///c:/Users/vjbel/hacks/BOA/src/githooks/compliance_hook.py)**: A Git pre-commit hook enforcing compliance triage locally.
-- **[`install_hooks.py`](file:///c:/Users/vjbel/hacks/BOA/install_hooks.py)**: Automates installation of git pre-commit hooks.
+| File | Description |
+|------|-------------|
+| [`src/swarm.py`](src/swarm.py) | Async Swarm Orchestration library mapping Python Agent classes to Band.ai REST SDK endpoints. Implements the **Agent Reuse Mechanism** (detecting if the workspace is near the 10-agent limit and reusing pre-registered credentials) and routes Auth SME reviews to Featherless AI. |
+| [`src/server.py`](src/server.py) | FastAPI server exposing REST endpoints (`/api/status`, `/api/events`, `/api/start`, `/api/consent`, `/api/telemetry`, `/api/mcp`) to manage swarm state, events, manual HITL overrides, and logs. Feeds the web dashboard in real-time. |
+| [`src/governance.py`](src/governance.py) | The deterministic compliance and validation engine — `parse_codeowners`, `triage_pr`, `ConsensusTracker`, `verify_schema_compliance`, `verify_openapi_compliance`, and `TelemetryScanner`. |
+| [`src/githooks/compliance_hook.py`](src/githooks/compliance_hook.py) | Git pre-commit hook enforcing compliance triage locally. Blocks commits touching high-stakes paths. |
+| [`install_hooks.py`](install_hooks.py) | Automates installation of the git pre-commit compliance hook. |
 
 ### 💻 Frontend Web Dashboard
-- **[`frontend/src/App.jsx`](file:///c:/Users/vjbel/hacks/BOA/frontend/src/App.jsx)**: React Swarm Control Center dashboard. It polls FastAPI server state and provides an interactive interface displaying the PR Board, static MCP checks, Watchdog alerts, Slack-like debate room feed, and manual HITL consent overrides. Includes a dedicated container-level `.scrollTop` scroll mechanic that prevents browser window scroll hijacking.
-- **[`frontend/src/index.css`](file:///c:/Users/vjbel/hacks/BOA/frontend/src/index.css)**: Custom dark-themed CSS system incorporating rich glassmorphism panel styling, glowing neon indicators (red for violations, green for compliance), and micro-animations.
+| File | Description |
+|------|-------------|
+| [`frontend/src/App.jsx`](frontend/src/App.jsx) | React Swarm Control Center dashboard. Polls FastAPI server state and provides an interactive interface displaying the PR Board, static MCP checks, Watchdog alerts, Slack-like debate room feed, and manual HITL consent overrides. |
+| [`frontend/src/index.css`](frontend/src/index.css) | Custom dark-themed CSS system with glassmorphism panel styling, glowing neon indicators (red for violations, green for compliance), and micro-animations. |
 
 ### 🧪 Tests & Mocks
-- **[`tests/test_swarm.py`](file:///c:/Users/vjbel/hacks/BOA/tests/test_swarm.py)**: Comprehensive test suite verifying all governance checks (CODEOWNERS matching, consensus rounds, watchdog leaks) and mocking the `AsyncRestClient` interface.
-- **[`mock_infrastructure/`](file:///c:/Users/vjbel/hacks/BOA/mock_infrastructure)**:
-  - `postgres_schema.sql`: Postgres checkout database structure.
-  - `openapi_contract.json`: OpenAPI spec details for `/api/v1/checkout`.
-  - `app_logs.json`: Mock application log stream containing connection pool exhaustion and memory leak signatures.
-  - `CODEOWNERS`: Swarm ownership rules defining high-stakes paths.
+| File | Description |
+|------|-------------|
+| [`tests/test_swarm.py`](tests/test_swarm.py) | Comprehensive test suite: governance checks (CODEOWNERS matching, consensus rounds, watchdog leaks), real Band.ai connectivity, AIML API partner routing verification, and full swarm orchestration integration test. |
+| [`mock_infrastructure/postgres_schema.sql`](mock_infrastructure/postgres_schema.sql) | PostgreSQL checkout database structure (users, products, carts, cart_items, transaction_audit_logs). |
+| [`mock_infrastructure/openapi_contract.json`](mock_infrastructure/openapi_contract.json) | OpenAPI spec for `/api/v1/checkout` with required field constraints. |
+| [`mock_infrastructure/app_logs.json`](mock_infrastructure/app_logs.json) | Mock application log stream containing memory leak and connection pool exhaustion signatures. |
+| [`mock_infrastructure/CODEOWNERS`](mock_infrastructure/CODEOWNERS) | Swarm ownership rules defining high-stakes paths (`/src/auth/`, `/src/billing/`). |
+| [`mock_infrastructure/redis_layout.json`](mock_infrastructure/redis_layout.json) | Redis caching layout for inventory concurrency (used by Inventory SME persona context). |
 
 ### 📜 Component Demo Scripts
-- **[`demo_swarm_execution.py`](file:///c:/Users/vjbel/hacks/BOA/demo_swarm_execution.py)**: Console-based CLI review simulation using `rich` panels.
-- **[`demo_triage_and_hook.py`](file:///c:/Users/vjbel/hacks/BOA/demo_triage_and_hook.py)**: Demonstrates the pre-commit hook and CODEOWNERS path triage matching.
-- **[`demo_mcp_verification.py`](file:///c:/Users/vjbel/hacks/BOA/demo_mcp_verification.py)**: Simulates schema mismatches and OpenAPI contract failures.
-- **[`demo_telemetry_watchdog.py`](file:///c:/Users/vjbel/hacks/BOA/demo_telemetry_watchdog.py)**: Scans log streams and triggers alert blocks when telemetry warnings are found.
+| File | Description |
+|------|-------------|
+| [`demo_swarm_execution.py`](demo_swarm_execution.py) | Full end-to-end console-based CLI review simulation with `rich` panels. Registers agents on Band.ai, runs adversarial debate rounds, and detects deadlock. |
+| [`demo_band_contract.py`](demo_band_contract.py) | Demonstrates Band.ai as the contract focal point: profile retrieval, room listing, room creation, and compliance message broadcast. |
+| [`demo_triage_and_hook.py`](demo_triage_and_hook.py) | Demonstrates the pre-commit hook and CODEOWNERS path triage matching across 3 scenarios. |
+| [`demo_mcp_verification.py`](demo_mcp_verification.py) | Simulates schema mismatches and OpenAPI contract failures using static MCP checks. |
+| [`demo_telemetry_watchdog.py`](demo_telemetry_watchdog.py) | Scans log streams and triggers alert blocks when telemetry anomalies are found. |
+
+### 📋 Configuration & Documentation
+| File | Description |
+|------|-------------|
+| [`codeband.yaml`](codeband.yaml) | Codeband orchestration configuration defining agent frameworks, models, review guidelines, and watchdog settings. |
+| [`agent_config.yaml`](agent_config.yaml) | Agent persona credential placeholders (actual keys loaded from `.env`). |
+| [`verify_env.py`](verify_env.py) | Pre-flight environment verification script testing connectivity to Anthropic, OpenAI, GitHub, Band.ai, AIML API, and Featherless AI. |
+| [`simulate_workflow.py`](simulate_workflow.py) | Offline workflow simulator demonstrating all 5 governance phases without live API calls. |
+| [`.env.example`](.env.example) | Template environment configuration with all required keys documented. |
+| [`requirements.txt`](requirements.txt) | Python dependency manifest. |
 
 ---
 
 ## 🛠️ Installation & Setup
 
-Ensure you have Node.js and Python installed. Activate your virtual environment and configure your `.env`:
+### Prerequisites
+- **Python 3.12+** with `pip`
+- **Node.js 18+** with `npm`
 
-```ini
-BAND_API_KEY=band_u_...
-OPENAI_API_KEY=...             # AIML API key
-FEATHERLESS_API_KEY=rc_...      # Featherless AI key
-GH_TOKEN=github_pat_...
+### 1. Clone & Configure
+```bash
+git clone https://github.com/vjb/WellActually.ai.git
+cd WellActually.ai
+cp .env.example .env
+# Edit .env with your real API keys
 ```
 
-### 1. Install dependencies
+### 2. Install Dependencies
 ```powershell
 # Python packages
-uv pip install fastapi uvicorn openai httpx pyyaml pydantic python-dotenv pytest anyio sse-starlette rich
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
 
 # Frontend packages
 cd frontend
-npm.cmd install
+npm install
 ```
 
-### 2. Run Tests
+### 3. Run Tests
 Verify everything is working:
 ```powershell
-.venv\Scripts\python.exe -m pytest
+.venv\Scripts\python.exe -m pytest tests/test_swarm.py -v
+```
+
+### 4. Run Component Demos (offline)
+```powershell
+.venv\Scripts\python.exe demo_triage_and_hook.py
+.venv\Scripts\python.exe demo_mcp_verification.py
+.venv\Scripts\python.exe demo_telemetry_watchdog.py
 ```
 
 ---
@@ -109,11 +136,59 @@ Verify everything is working:
 2. **Start the React Frontend Dashboard**:
    ```powershell
    cd frontend
-   npm.cmd run dev
+   npm run dev
    ```
 3. Open your browser and navigate to `http://localhost:5173`.
 4. Click **Start Swarm Review** and observe:
    - Zero-trust compliance triage matches billing files and halts execution.
    - Click **Approve Exception** to launch the swarm agents.
-   - Watch the chat feed pull remote rooms, rehydrate context, and route reviews dynamically to **Featherless AI**.
-   - Notice the expected memory limit crash-out which triggers the `CRASHED` state on the dashboard (as no safety fallbacks are allowed).
+   - Watch the chat feed pull remote rooms, rehydrate context, and route reviews dynamically to **Featherless AI** (Auth SME) and **AIML API** (Coder & Cart SME).
+   - Observe the adversarial debate as the Coder stubbornly inserts `discount_applied` and Reviewers block it with schema violations.
+   - After 3 failed rounds, the **ConsensusTracker** triggers a deadlock halt with HITL escalation.
+   - Use the **Override & Approve PR** or **Reject PR** buttons to resolve the deadlock.
+
+---
+
+## 🏗️ Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                     SWARM CONTROL CENTER                         │
+│                    (React + Vite Dashboard)                       │
+│  ┌────────────┬───────────────┬─────────────┬──────────────────┐ │
+│  │ PR Board   │ MCP Checkers  │  Watchdog   │  Debate Feed     │ │
+│  │ + Triage   │ Schema+OpenAPI│  Telemetry  │  + HITL Consent  │ │
+│  └────────────┴───────────────┴─────────────┴──────────────────┘ │
+│                          ↕ REST Polling                           │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │            FastAPI Backend (src/server.py)                    │ │
+│  │  /api/start  /api/status  /api/events  /api/consent          │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                          ↕                                        │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │         Swarm Orchestration (src/swarm.py)                    │ │
+│  │  ┌─────────────┐  ┌────────────────────┐  ┌──────────────┐  │ │
+│  │  │ Conductor    │  │ Lead Coder Agent   │  │ Reviewer SMEs│  │ │
+│  │  │ (AIML API)   │  │ (AIML API gpt-4o)  │  │ Auth: Llama  │  │ │
+│  │  │              │  │                    │  │ Cart: gpt-4o │  │ │
+│  │  └──────────────┘  └────────────────────┘  └──────────────┘  │ │
+│  │                          ↕ Band.ai REST SDK                   │ │
+│  │  ┌──────────────────────────────────────────────────────────┐ │ │
+│  │  │ Band.ai Platform: Agents, Rooms, Messages, Mentions,     │ │ │
+│  │  │ Context, Events, Memories (local fallback)               │ │ │
+│  │  └──────────────────────────────────────────────────────────┘ │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                          ↕                                        │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │      Governance Engine (src/governance.py)                    │ │
+│  │  CODEOWNERS Triage │ ConsensusTracker │ TelemetryScanner     │ │
+│  │  Schema Compliance │ OpenAPI Compliance                      │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📜 License
+
+MIT License. Built for the **Band of Agents Hackathon** (June 12–19, 2026).

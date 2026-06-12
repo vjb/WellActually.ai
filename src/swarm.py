@@ -230,26 +230,27 @@ class SwarmSession:
             print(f"[BAND REST] Agent limit (10) nearly reached. Reusing pre-registered agents...")
             self.reused = True
             
+            # Agent credentials loaded from environment variables (never hardcoded)
             REUSED_KEYS = {
                 "conductor": {
-                    "name": "conductor-7c6144ef",
-                    "id": "8f9c63f5-012b-4eb7-8463-34786c3dd7ab",
-                    "key": "band_a_1781282903_f4OUjyRBh0-KihYSEMY1khjyV8KqYo5y"
+                    "name": os.getenv("BAND_REUSE_CONDUCTOR_NAME", "conductor-7c6144ef"),
+                    "id": os.getenv("BAND_REUSE_CONDUCTOR_ID", ""),
+                    "key": os.getenv("BAND_REUSE_CONDUCTOR_KEY", "")
                 },
                 "coder": {
-                    "name": "coder-7c6144ef",
-                    "id": "88110575-b095-4f65-86a3-84a4ef7f7fa3",
-                    "key": "band_a_1781282903_eYUSGqLIyByGcfdhTQp2XMOBx2I4rvLP"
+                    "name": os.getenv("BAND_REUSE_CODER_NAME", "coder-7c6144ef"),
+                    "id": os.getenv("BAND_REUSE_CODER_ID", ""),
+                    "key": os.getenv("BAND_REUSE_CODER_KEY", "")
                 },
                 "reviewer_auth": {
-                    "name": "coder-b2a5955b",
-                    "id": "dbe0bddc-86c4-4dbf-a5b9-e49cba04cb1a",
-                    "key": "band_a_1781282911_8C07yfLqhJcvB45el-UyzbQnrSQgehfF"
+                    "name": os.getenv("BAND_REUSE_REVIEWER_AUTH_NAME", "reviewer-auth"),
+                    "id": os.getenv("BAND_REUSE_REVIEWER_AUTH_ID", ""),
+                    "key": os.getenv("BAND_REUSE_REVIEWER_AUTH_KEY", "")
                 },
                 "reviewer_cart": {
-                    "name": "conductor-b2a5955b",
-                    "id": "c4828110-44cb-4796-9ff3-59642a2abb5f",
-                    "key": "band_a_1781282911_S0IczI34bOta-3NMzYTlweWShhcJiWWj"
+                    "name": os.getenv("BAND_REUSE_REVIEWER_CART_NAME", "reviewer-cart"),
+                    "id": os.getenv("BAND_REUSE_REVIEWER_CART_ID", ""),
+                    "key": os.getenv("BAND_REUSE_REVIEWER_CART_KEY", "")
                 }
             }
 

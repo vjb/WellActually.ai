@@ -12,10 +12,10 @@ Furthermore, the swarm is governed by a deterministic, code-backed engine that e
 
 * **Orchestration Layer:** `codeband` (Headless Git worktree isolation, agent routing, and Band.ai synchronization).
 * **Network & State Coordination:** Band.ai API & WebSockets.
-* **LLM Reasoning Core (Adversarial Pairing):**
-  * Claude CLI (Anthropic API).
-  * Codex CLI hijacked via **AI/ML API** (Partner Track) for massive serverless model access.
-* **Context Provisioning:** Local and remote Model Context Protocol (MCP) servers.
+* **LLM Reasoning Core (Adversarial Multi-Model Pairing):**
+  * **AIML API** (`gpt-4o-mini`) — Sponsor Partner. Powers the Lead Coder, Cart SME Reviewer, and Conductor Orchestrator agents.
+  * **Featherless AI** (`unsloth/Meta-Llama-3.1-70B-Instruct`) — Sponsor Partner. Powers the Auth & Fraud SME Reviewer agent for specialized security validation.
+* **Context Provisioning:** Static Model Context Protocol (MCP) checks via PostgreSQL schema and OpenAPI contract.
 * **Governance Engine:** Custom deterministic Python logic (`governance.py`).
 
 ---
@@ -52,7 +52,7 @@ To transition from a "weekend hack" to an enterprise-ready product, the prompt-b
 
 ### A. CodeownersTriage (Compliance Policy)
 
-* **Logic:** Parses a mock `mock_infrastructure/CODEOWNERS` file. If the PR diff includes paths assigned to restricted teams (e.g., `/src/auth/` or `/src/billing/` or `/src/billing/` or `/src/billing/` or `/src/billing/`), the engine overrides the agents' approval.
+* **Logic:** Parses a mock `mock_infrastructure/CODEOWNERS` file. If the PR diff includes paths assigned to restricted teams (e.g., `/src/auth/` or `/src/billing/`), the engine overrides the agents' approval.
 * **Action:** Forces a mandatory `@@human` escalation, suspending the `codeband` room until explicit administrative approval is provided.
 
 ### B. ConsensusTracker (Deadlock Resolution)

@@ -33,3 +33,9 @@ dist-ssr/
 
 # Codeband local directory
 .codeband/
+
+# UAT screenshots (re-recorded locally as needed)
+uat_*.png
+
+# Runtime-generated data
+mock_infrastructure/local_memories.json

@@ -1,7 +1,7 @@
 import os
 import sys
 import asyncio
-import logging
+import time
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +16,7 @@ from src.governance import verify_schema_compliance, verify_openapi_compliance, 
 app = FastAPI(title="Swarm Control Center Backend", version="1.0.0")
 
 # Enable CORS for frontend development
+# TODO: Restrict to frontend origin in production (e.g., http://localhost:5173)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -53,7 +54,7 @@ class SwarmState:
 
     def add_event(self, message: str, sender: str = "SYSTEM", role: str = "SYSTEM", level: str = "info"):
         self.events.append({
-            "timestamp": getattr(asyncio.get_event_loop(), "time", lambda: 0.0)(),
+            "timestamp": time.time(),
             "sender": sender,
             "role": role,
             "message": message,
@@ -162,7 +163,7 @@ async def run_simulation_task():
                     
                 if state.human_consent:
                     state.status = "COMPLETED"
-                    state.add_event("✓ Human Operator OVERRIDED the deadlock and approved the PR.", level="info")
+                    state.add_event("✓ Human Operator OVERRODE the deadlock and approved the PR.", level="info")
                 else:
                     state.status = "HALTED"
                     state.add_event("⚠️ Human Operator REJECTED the PR. Closing swarm room.", level="error")
@@ -212,10 +213,16 @@ def start_simulation(background_tasks: BackgroundTasks):
 @app.post("/api/consent")
 def submit_consent(req: ConsentRequest):
     if state.status not in ["PENDING_HUMAN_APPROVAL", "HALTED", "RUNNING"]:
-        # Wait, human override is allowed when state is HALTED (deadlock) or PENDING_HUMAN_APPROVAL (triage)
-        pass
+        raise HTTPException(status_code=400, detail=f"Cannot submit consent in state '{state.status}'.")
     state.human_consent = req.approve
     return {"status": "ok", "consent": req.approve}
+
+@app.post("/api/reset")
+def reset_state():
+    if state.status == "RUNNING":
+        raise HTTPException(status_code=400, detail="Cannot reset while simulation is running.")
+    state.reset()
+    return {"status": "reset"}
 
 @app.get("/api/telemetry")
 def get_telemetry():

@@ -36,13 +36,13 @@ The system operates in a multi-phase, isolated loop to prevent context pollution
 
 The generic `codeband` worker pools are specialized into distinct enterprise domains using `agent_config.yaml`.
 
-| Agent Identity | Framework / Tooling | Core Responsibility |
+| Agent Identity | LLM Provider / Model | Core Responsibility |
 | --- | --- | --- |
-| **Conductor** | Claude | The Swarm Orchestrator. Evaluates PR metadata, triggers routing, and enforces the `CODEOWNERS` policy. |
-| **Auth & Fraud SME** | Codex (AI/ML API) + `PostgreSQL MCP` + `OpenAPI MCP` | The Security Guard. Verifies that incoming PRs do not accidentally expose sensitive endpoints, bypass user roles, or violate financial SQL constraints. |
-| **Cart SME** | Claude + `OpenAPI MCP` | The Checkout Guard. Ensures changes do not break state machines, pricing calculations, or payload schemas for the Cart microservice. |
-| **Inventory SME** | Codex (AI/ML API) + `Redis MCP` | The Concurrency Guard. Inspects caching layouts and distributed locks to prevent data racing and stock overselling in fulfillment queues. |
-| **Mergemaster** | Claude | Final integration check ensuring regression tests pass before approving the final automated branch merge. |
+| **Conductor** | AIML API (`gpt-4o-mini`) | The Swarm Orchestrator. Evaluates PR metadata, triggers routing, and enforces the `CODEOWNERS` policy. |
+| **Lead Coder** | AIML API (`gpt-4o-mini`) | The Implementation Agent. Writes checkout code proposals and responds to reviewer feedback with revisions. |
+| **Auth & Fraud SME** | Featherless AI (`Llama-3.1-70B`) + `PostgreSQL MCP` + `OpenAPI MCP` | The Security Guard. Verifies that incoming PRs do not accidentally expose sensitive endpoints, bypass user roles, or violate financial SQL constraints. |
+| **Cart SME** | AIML API (`gpt-4o-mini`) + `OpenAPI MCP` | The Checkout Guard. Ensures changes do not break state machines, pricing calculations, or payload schemas for the Cart microservice. |
+| **Inventory SME** | *Reserved* + `Redis MCP` | The Concurrency Guard. Inspects caching layouts and distributed locks to prevent data racing and stock overselling. (Defined in `codeband.yaml` for future expansion.) |
 
 ---
 
@@ -85,6 +85,6 @@ To guarantee flawless hackathon demonstrations and robust CI/CD integration, the
 
 ## 7. Strategic Hackathon Differentiators
 
-* **The Partner Track Advantage:** By overriding `OPENAI_BASE_URL`, the Codex CLI framework is seamlessly redirected to the **AI/ML API** platform, qualifying the project for the partner prize track while maintaining adversarial integrity.
+* **The Partner Track Advantage:** By routing different agents to different sponsor LLM providers (**AIML API** for Coder/Cart/Conductor, **Featherless AI** for Auth SME), the project maximizes adversarial diversity while deeply integrating with both sponsor platforms.
 * **Beyond "Vibe Coding":** This is not a swarm arbitrarily modifying code. It enforces rigid corporate boundaries (`CODEOWNERS`) and relies on real system state (MCP database queries) rather than LLM intuition.
-* **The Integration of Frameworks:** Brilliantly combines `codeband` for git worktree isolation, Band.ai for protocol-level multi-agent routing, and MCP for Bounded Context execution, representing the bleeding edge of agentic software engineering.
+* **Codeband-Inspired Architecture:** Uses Codeband as the architectural reference for adversarial multi-model review, extending the pattern with domain-driven governance, MCP bounded context, and HITL escalation gates.

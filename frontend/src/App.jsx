@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const POLL_INTERVAL_MS = 1000;
+
 // Lightweight Python syntax highlighter
 function highlightPython(code) {
   if (!code) return null;
@@ -97,8 +100,9 @@ function App() {
   
   const [events, setEvents] = useState([]);
   const [watchdogLogs, setWatchdogLogs] = useState([]);
-  const [activeTab, setActiveTab] = useState("debate"); // "debate" or "code" or "logs"
+  const [activeTab, setActiveTab] = useState("debate"); // "debate" or "code"
   const [isStarting, setIsStarting] = useState(false);
+  const [backendOnline, setBackendOnline] = useState(true);
   
   const chatContainerRef = useRef(null);
 
@@ -106,8 +110,9 @@ function App() {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const resStatus = await fetch("http://localhost:8000/api/status");
+        const resStatus = await fetch(`${API_BASE}/api/status`);
         if (resStatus.ok) {
+          setBackendOnline(true);
           const data = await resStatus.json();
           setStatus(data.status);
           setPrId(data.pr_id);
@@ -120,15 +125,15 @@ function App() {
           setOpenapiCheck(data.openapi_check);
         }
 
-        const resEvents = await fetch("http://localhost:8000/api/events");
+        const resEvents = await fetch(`${API_BASE}/api/events`);
         if (resEvents.ok) {
           const data = await resEvents.json();
           setEvents(data);
         }
       } catch (err) {
-        console.error("Failed to connect to backend api:", err);
+        setBackendOnline(false);
       }
-    }, 1000);
+    }, POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
   }, []);
@@ -137,7 +142,7 @@ function App() {
   useEffect(() => {
     const fetchTelemetry = async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/telemetry");
+        const res = await fetch(`${API_BASE}/api/telemetry`);
         if (res.ok) {
           const data = await res.json();
           setWatchdogLogs(data);
@@ -159,7 +164,7 @@ function App() {
   const handleStart = async () => {
     setIsStarting(true);
     try {
-      await fetch("http://localhost:8000/api/start", { method: "POST" });
+      await fetch(`${API_BASE}/api/start`, { method: "POST" });
     } catch (err) {
       console.error("Error starting simulation:", err);
     }
@@ -168,7 +173,7 @@ function App() {
 
   const handleConsent = async (approve) => {
     try {
-      await fetch("http://localhost:8000/api/consent", {
+      await fetch(`${API_BASE}/api/consent`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ approve })
@@ -177,6 +182,17 @@ function App() {
       console.error("Error submitting consent:", err);
     }
   };
+
+  const handleReset = async () => {
+    try {
+      await fetch(`${API_BASE}/api/reset`, { method: "POST" });
+    } catch (err) {
+      console.error("Error resetting state:", err);
+    }
+  };
+
+  const canReset = !["IDLE", "RUNNING", "TRIAGE", "PENDING_HUMAN_APPROVAL"].includes(status);
+  const canStart = ["IDLE", "COMPLETED", "HALTED", "CRASHED"].includes(status) && !isStarting;
 
   const getStatusColor = (s) => {
     switch (s) {
@@ -208,8 +224,8 @@ function App() {
     if (!sender) return "rgba(255,255,255,0.7)";
     if (sender.includes("conductor")) return "#3b82f6"; // Orchestrator blue
     if (sender.includes("coder")) return "#22c55e"; // Coder green
-    if (sender.includes("reviewer-auth") || sender.includes("coder-b2a5")) return "#a855f7"; // Auth SME purple
-    if (sender.includes("reviewer-cart") || sender.includes("conductor-b2a5")) return "#eab308"; // Cart SME yellow
+    if (sender.includes("reviewer-auth")) return "#a855f7"; // Auth SME purple (Featherless)
+    if (sender.includes("reviewer-cart")) return "#eab308"; // Cart SME yellow (AIML)
     return "rgba(255,255,255,0.8)";
   };
 
@@ -227,10 +243,21 @@ function App() {
         </div>
         
         <div style={{ display: "flex", alignItems: "center", gap: "1.5rem" }}>
+          {!backendOnline && (
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <span style={{ width: "10px", height: "10px", borderRadius: "50%", backgroundColor: "#ef4444" }}></span>
+              <span style={{ fontSize: "0.85rem", color: "#ef4444", fontWeight: "bold" }}>Backend Offline</span>
+            </div>
+          )}
           {status === "RUNNING" && (
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <span className="pulse" style={{ width: "10px", height: "10px", borderRadius: "50%", backgroundColor: "#22c55e" }}></span>
               <span style={{ fontSize: "0.85rem", color: "#10b981" }}>Live Debate Active</span>
+              {consensusRound > 0 && (
+                <span style={{ fontSize: "0.8rem", color: "#9ca3af", marginLeft: "0.25rem" }}>
+                  — Round {consensusRound} of 3
+                </span>
+              )}
             </div>
           )}
           
@@ -248,22 +275,41 @@ function App() {
           
           <button
             onClick={handleStart}
-            disabled={status === "RUNNING" || status === "TRIAGE" || isStarting}
+            disabled={!canStart}
             className="glass-panel"
             style={{
               padding: "0.5rem 1.5rem",
               borderRadius: "6px",
-              cursor: (status === "RUNNING" || status === "TRIAGE" || isStarting) ? "not-allowed" : "pointer",
+              cursor: canStart ? "pointer" : "not-allowed",
               fontWeight: "bold",
-              background: "linear-gradient(135deg, #0891b2, #7c3aed)",
+              background: canStart ? "linear-gradient(135deg, #0891b2, #7c3aed)" : "rgba(55, 65, 81, 0.5)",
               border: "none",
               color: "white",
-              transition: "transform 0.1s"
+              transition: "transform 0.1s, opacity 0.2s",
+              opacity: canStart ? 1 : 0.5
             }}
-            onMouseDown={(e) => e.target.style.transform = "scale(0.98)"}
+            onMouseDown={(e) => canStart && (e.target.style.transform = "scale(0.98)")}
             onMouseUp={(e) => e.target.style.transform = "scale(1)"}
           >
             {isStarting ? "Dispatching..." : "Start Swarm Review"}
+          </button>
+          
+          <button
+            onClick={handleReset}
+            disabled={!canReset}
+            style={{
+              padding: "0.5rem 1rem",
+              borderRadius: "6px",
+              cursor: canReset ? "pointer" : "not-allowed",
+              fontWeight: "bold",
+              background: "none",
+              border: canReset ? "1px solid rgba(239, 68, 68, 0.5)" : "1px solid rgba(255,255,255,0.1)",
+              color: canReset ? "#f87171" : "rgba(255,255,255,0.25)",
+              fontSize: "0.85rem",
+              transition: "all 0.2s"
+            }}
+          >
+            ↺ Reset
           </button>
         </div>
       </header>
@@ -515,11 +561,18 @@ function App() {
                         <span style={{ fontWeight: "bold", color: getSenderColor(evt.sender), fontSize: "0.85rem" }}>
                           {evt.sender} {evt.role !== "SYSTEM" && `(${evt.role})`}
                         </span>
-                        {evt.sender.includes("reviewer-auth") && (
-                          <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(168,85,247,0.15)", color: "#a855f7", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
-                            Featherless: Llama-3-70B
-                          </span>
-                        )}
+                        <div style={{ display: "flex", gap: "0.4rem" }}>
+                          {evt.sender.includes("reviewer-auth") && (
+                            <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(168,85,247,0.15)", color: "#a855f7", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
+                              Featherless: Llama-3.1-70B
+                            </span>
+                          )}
+                          {(evt.sender.includes("coder") || evt.sender.includes("reviewer-cart") || evt.sender.includes("conductor")) && evt.role !== "SYSTEM" && (
+                            <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
+                              AIML: GPT-4o-mini
+                            </span>
+                          )}
+                        </div>
                       </div>
                       
                       {evt.message.includes("def ") ? (

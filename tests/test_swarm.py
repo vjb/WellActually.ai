@@ -167,6 +167,7 @@ def test_goal_4_observability_telemetry_leak_detection(tmp_path):
 # ============================================================================
 
 @pytest.mark.anyio
+@pytest.mark.skipif(not os.getenv("BAND_API_KEY"), reason="BAND_API_KEY not set — skipping live connectivity test")
 async def test_band_real_connectivity():
     """
     Verifies actual reachability and authorization status of the Band.ai platform.
@@ -183,13 +184,14 @@ async def test_band_real_connectivity():
     profile_response = await client.human_api_profile.get_my_profile()
     assert profile_response is not None, "Failed to retrieve profile response from Band.ai REST endpoint."
     assert profile_response.data is not None, "Profile data is empty."
-    assert profile_response.data.email == "vjbeltrani@gmail.com", f"Expected email vjbeltrani@gmail.com, got {profile_response.data.email}"
+    assert profile_response.data.email is not None, "Profile email is empty."
 
 
 # ============================================================================
 # TEST 5: OpenAI & Partner Endpoint Routing (AI/ML API Track)
 # ============================================================================
 
+@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set — skipping partner routing test")
 def test_partner_endpoint_routing_verification():
     """
     Verifies that requests directed through OpenAI client are correctly routed

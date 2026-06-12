@@ -3,7 +3,7 @@ import json
 import time
 import logging
 import uuid
-import asyncio
+from typing import Optional
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -43,13 +43,16 @@ class Agent:
     """
     Base Agent class representing an LLM-backed persona in the swarm.
     """
+    DEFAULT_MAX_TOKENS = 600
+    DEFAULT_TEMPERATURE = 0.3
+
     def __init__(self, name: str, role: str, system_prompt: str, model: str = "gpt-4o-mini"):
         self.name = name
         self.role = role
         self.system_prompt = system_prompt
         self.model = model
-        self.agent_id = None
-        self.api_key = None
+        self.agent_id: Optional[str] = None
+        self.api_key: Optional[str] = None
         self.rest_client = None
 
     def generate_response(self, messages: list[dict], context: str = "") -> str:
@@ -80,8 +83,8 @@ class Agent:
             response = active_client.chat.completions.create(
                 model=self.model,
                 messages=api_messages,
-                max_tokens=600,
-                temperature=0.3
+                max_tokens=Agent.DEFAULT_MAX_TOKENS,
+                temperature=Agent.DEFAULT_TEMPERATURE
             )
             return response.choices[0].message.content.strip()
         except Exception as e:

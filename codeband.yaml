@@ -1,5 +1,5 @@
 repo:
-  url: https://github.com/example/myrepo.git
+  url: https://github.com/vjb/WellActually.ai.git
   branch: main
 agents:
   conductor:

@@ -2,6 +2,14 @@
 ### Domain-Driven Adversarial Code Review Swarm Center
 *A multi-agent compliance & governance platform built on **Band.ai** and powered by **Featherless AI** & **AIML API**.*
 
+> **🏆 Track 2: Multi-Agent Software Development** — Cross-model code review with adversarial consensus, bounded-context validation, and human-in-the-loop governance.
+
+---
+
+## 🎬 Demo Video
+
+> *Coming soon — demo video will be added before submission.*
+
 ---
 
 ## 🚀 Overview
@@ -33,6 +41,15 @@ To leverage specialized open-source models at scale, we route the **Auth & Fraud
 
 ### 3. **AIML API** (Hackathon Sponsor Partner)
 All other agents in the swarm (the Conductor Orchestrator, the Lead Coder, and the Cart SME Reviewer) are routed via the **AIML API** gateway (`https://api.aimlapi.com/v1`) using the `gpt-4o-mini` model. By redirecting `OPENAI_BASE_URL` to the AIML API endpoint, we achieve seamless integration with the sponsor's infrastructure while maintaining standard OpenAI client compatibility.
+
+### 4. **Codeband** (Architectural Reference)
+WellActually.ai is built on the same **Band.ai REST SDK** (`thenvoi-rest`) that powers [Codeband](https://github.com/thenvoi/codeband). We use Codeband as the **reference implementation** for adversarial multi-model review workflows, extending the pattern with:
+- **Domain-Driven Governance** — a deterministic `governance.py` engine that enforces CODEOWNERS policies, consensus tracking, and MCP bounded-context validation on top of the LLM debate.
+- **Cross-Provider Adversarial Pairing** — instead of Claude vs Codex, we pair **Featherless AI** (Llama-3.1-70B) against **AIML API** (GPT-4o-mini), maximizing review diversity across model architectures and sponsor integrations.
+- **Human-in-the-Loop Escalation** — deterministic deadlock detection with async blocking consent gates, expanding Codeband's risk-aware merging concept into full HITL governance.
+- **Real-Time Web Dashboard** — a React Swarm Control Center providing live visibility into the debate, compliance checks, and telemetry anomalies.
+
+The included `codeband.yaml` defines our agent topology following Codeband's configuration schema (Conductor, Coders, Reviewers, Watchdog, Mergemaster), demonstrating compatibility with the Codeband orchestration model.
 
 ---
 
@@ -147,6 +164,46 @@ Verify everything is working:
    - After 3 failed rounds, the **ConsensusTracker** triggers a deadlock halt with HITL escalation.
    - Use the **Override & Approve PR** or **Reject PR** buttons to resolve the deadlock.
 
+### 📸 Dashboard Screenshots
+
+| Idle State | Pending Human Approval | Live Debate |
+|:---:|:---:|:---:|
+| ![Idle](docs/screenshots/01_idle_state.png) | ![Pending](docs/screenshots/02_pending_approval.png) | ![Running](docs/screenshots/03_running_debate.png) |
+
+| Deadlock & HITL | Code Tab (Syntax Highlighted) |
+|:---:|:---:|
+| ![Halted](docs/screenshots/04_halted_deadlock.png) | ![Code](docs/screenshots/05_code_tab_highlighted.png) |
+
+---
+
+## 🔬 Demo Scope: What's Real vs. Simulated
+
+This is a hackathon prototype. The **architecture and agent orchestration are production-grade**; the **input data is simulated** to demonstrate the governance workflow in a controlled environment.
+
+### ✅ Real (Live Infrastructure)
+| Component | Detail |
+|-----------|--------|
+| **Band.ai Multi-Agent Platform** | Real agent registration, real chat rooms, real message passing, real context rehydration — all via Band.ai REST SDK. |
+| **LLM Adversarial Debate** | Live API calls to **Featherless AI** (Llama-3.1-70B) and **AIML API** (GPT-4o-mini). Reviewers genuinely analyze code and produce original responses every run. |
+| **Deadlock Detection** | The `ConsensusTracker` in `governance.py` counts rounds and triggers the halt — the Coder genuinely refuses to comply and Reviewers genuinely reject. |
+| **Human-in-the-Loop Gates** | Real state machine with async blocking — the swarm literally pauses until a human clicks Approve or Reject. |
+| **Memory Persistence** | Schema violation memories are stored and rehydrated across rounds (local JSONL fallback for Band.ai Enterprise Memory API). |
+| **Pre-Commit Git Hook** | Actually runs on `git commit` and blocks commits touching high-stakes paths. |
+
+### 🎭 Simulated (Mock Data for Demo)
+
+The system uses a **two-layer architecture**: deterministic governance gates (Layer 1) feed structured violation reports into LLM agents (Layer 2) who perform adversarial reasoning. The mock data below is for Layer 1 inputs only — the LLM debate itself is fully live and non-deterministic.
+
+| Component | What's Mocked (Layer 1) | What the LLMs Add (Layer 2) | Production Path |
+|-----------|------------------------|----------------------------|------------------|
+| **Pull Request** | Hardcoded to PR-104 touching `src/cart/` and `src/billing/`. | N/A — triage is deterministic. | GitHub Webhooks for real PR payloads. |
+| **Database Schema Check** | The governance engine pattern-matches code against a static `postgres_schema.sql` and produces a structured violation report (e.g., `"Column 'discount_applied' does not exist in table 'cart_items'"`). | The violation report is **injected as context** into the Reviewer LLM prompt. The Reviewer then writes a *detailed code review* explaining the security/data integrity implications. The Coder LLM receives this review and produces a *novel workaround* (try/except, local dict, ALTER TABLE) — each round is different. This adversarial reasoning is why LLMs are essential. | Live Postgres `information_schema` query or a real MCP server. |
+| **OpenAPI Contract Check** | Validates code against a static `openapi_contract.json` file. | Same two-layer flow: structured violations feed LLM reasoning. | Live OpenAPI spec from service registry. |
+| **Telemetry Watchdog** | Reads anomalies from a static `app_logs.json` file. | Surfaces anomalies in the dashboard for human context during HITL decisions. | Datadog/Prometheus/OpenTelemetry streams. |
+| **Coder Stubbornness** | The Coder's system prompt steers it to always include `discount_applied` in its initial SQL. | But each revision is *genuinely different* — the LLM invents creative workarounds (wrapping in try/except, adding fallback dicts, proposing ALTER statements). The Reviewers must analyze each new strategy independently. This emergent adversarial behavior cannot be scripted. | In production, the Coder receives real PR diffs. |
+
+> **Why this matters:** The simulated inputs let us demonstrate the *complete governance workflow* (triage → consent → debate → deadlock → HITL) reliably in a 7-day hackathon. The architecture itself — agent orchestration, adversarial consensus, multi-model routing, and human escalation — is designed to plug into real infrastructure with minimal changes.
+
 ---
 
 ## 🏗️ Architecture
@@ -186,6 +243,12 @@ Verify everything is working:
 │  └──────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 👥 Team
+
+Built by **VJ Beltrani** for the [Band of Agents Hackathon](https://lablab.ai/event/band-of-agents-hackathon) (June 12–19, 2026).
 
 ---
 

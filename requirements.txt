@@ -4,7 +4,6 @@
 # FastAPI backend server
 fastapi>=0.115.0
 uvicorn>=0.34.0
-sse-starlette>=2.0.0
 
 # LLM provider clients (AIML API + Featherless AI)
 openai>=1.60.0

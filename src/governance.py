@@ -2,8 +2,6 @@ import json
 import logging
 import os
 
-# Configure logging for the watchdog and engine
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GovernanceEngine")
 
 

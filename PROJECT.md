@@ -48,6 +48,7 @@
 - `GET /api/events`: Returns chronological event feed.
 - `POST /api/start`: Launches the simulation as a background task.
 - `POST /api/consent`: Submits human approval/rejection for HITL gates.
+- `POST /api/reset`: Resets all swarm state back to IDLE. Clears events, triage, code, and consensus data.
 - `GET /api/telemetry`: Returns watchdog anomaly scan results.
 - `GET /api/mcp`: Returns live MCP schema and OpenAPI compliance checks.
 

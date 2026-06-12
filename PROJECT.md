@@ -10,10 +10,10 @@
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
 | 1 | Setup & Verify Env | Perform environment check and verify `cb doctor` | none | DONE |
-| 2 | Swarm Config & Mocks | Configure `codeband.yaml` and verify `mock_infrastructure/` | M1 | IN_PROGRESS |
-| 3 | Governance Engine | Implement `src/governance.py` | M2 | IN_PROGRESS |
-| 4 | Simulation Test Suite | Implement `tests/test_swarm.py` | M3 | IN_PROGRESS |
-| 5 | Verify & Audit | Verify `cb doctor` and `pytest` pass all scenarios; run audit | M4 | PLANNED |
+| 2 | Swarm Config & Mocks | Configure `codeband.yaml` and verify `mock_infrastructure/` | M1 | DONE |
+| 3 | Governance Engine | Implement `src/governance.py` | M2 | DONE |
+| 4 | Simulation Test Suite | Implement `tests/test_swarm.py` | M3 | DONE |
+| 5 | Verify & Audit | Verify `cb doctor` and `pytest` pass all scenarios; run audit | M4 | DONE |
 
 ## Interface Contracts
 ### Governance Engine API (`src/governance.py`)

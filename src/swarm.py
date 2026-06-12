@@ -1,4 +1,6 @@
 import os
+import json
+import time
 import logging
 import uuid
 import asyncio
@@ -175,6 +177,38 @@ class SwarmSession:
         self.unique_suffix = str(uuid.uuid4())[:8]
         self.reused = False
 
+    def load_local_memories(self, agent_name: str) -> list:
+        path = "mock_infrastructure/local_memories.json"
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return [m for m in data if m.get("agent") == agent_name]
+            except Exception:
+                return []
+        return []
+
+    def save_local_memory(self, agent_name: str, content: str):
+        path = "mock_infrastructure/local_memories.json"
+        memories = []
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    memories = json.load(f)
+            except Exception:
+                memories = []
+        memories.append({
+            "agent": agent_name,
+            "content": content,
+            "timestamp": time.time()
+        })
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(memories, f, indent=2)
+        except Exception as e:
+            print(f"[BAND REST] Failed to write local memory: {e}")
+
     async def initialize_session(self, conductor: Agent, coder: CoderAgent, reviewers: list[ReviewerAgent]):
         """
         Registers agents on the platform, creates a chat room, and adds participants.
@@ -343,9 +377,22 @@ class SwarmSession:
             print(f"[BAND REST] Rehydrating Chat Context for {reviewer.name}...")
             await reviewer.rest_client.agent_api_context.get_agent_chat_context(chat_id=self.room_id)
 
-            # Query memories (will crash on 403 plan limitation)
+            # Query memories (will crash on 403 plan limitation on Free tier if not handled)
             print(f"[BAND REST] Querying memories for {reviewer.name}...")
-            await reviewer.rest_client.agent_api_memories.list_agent_memories(scope="all")
+            try:
+                if os.getenv("BAND_MEMORY_MODE") == "local":
+                    # Force local mode directly if configured
+                    raise Exception("Local memory mode forced via configuration.")
+                await reviewer.rest_client.agent_api_memories.list_agent_memories(scope="all")
+            except Exception as e:
+                is_403 = hasattr(e, "status_code") and e.status_code == 403
+                use_local = os.getenv("BAND_MEMORY_MODE") == "local" or is_403
+                if use_local:
+                    print(f"[BAND REST] Memory API restricted or offline. Falling back to local memories for {reviewer.name}.")
+                    local_mems = self.load_local_memories(reviewer.name)
+                    print(f"[BAND REST] Loaded {len(local_mems)} local memories for {reviewer.name}.")
+                else:
+                    raise e
 
             review = await reviewer.review_code(
                 coder_response,
@@ -366,20 +413,35 @@ class SwarmSession:
                 )
             )
 
-            # If review failed, store violation memory (will crash on 403 plan limitation)
+            # If review failed, store violation memory (will crash on 403 plan limitation on Free tier if not handled)
             if "❌ REVIEW FAILED" in review or "REVIEW FAILED" in review:
                 round_passed = False
                 print(f"[BAND REST] Storing schema violation memory for {reviewer.name}...")
-                await reviewer.rest_client.agent_api_memories.create_agent_memory(
-                    memory=thenvoi_rest.MemoryCreateRequest(
-                        content="Violating Postgres table cart_items schema - discount_applied does not exist.",
-                        scope="subject",
-                        segment="agent",
-                        system="working",
-                        thought="Memory stored to check for repeating violations in subsequent rounds.",
-                        type="semantic"
+                try:
+                    if os.getenv("BAND_MEMORY_MODE") == "local":
+                        # Force local mode directly if configured
+                        raise Exception("Local memory mode forced via configuration.")
+                    await reviewer.rest_client.agent_api_memories.create_agent_memory(
+                        memory=thenvoi_rest.MemoryCreateRequest(
+                            content="Violating Postgres table cart_items schema - discount_applied does not exist.",
+                            scope="subject",
+                            segment="agent",
+                            system="working",
+                            thought="Memory stored to check for repeating violations in subsequent rounds.",
+                            type="semantic"
+                        )
                     )
-                )
+                except Exception as e:
+                    is_403 = hasattr(e, "status_code") and e.status_code == 403
+                    use_local = os.getenv("BAND_MEMORY_MODE") == "local" or is_403
+                    if use_local:
+                        print(f"[BAND REST] Memory API restricted or offline. Saving memory locally for {reviewer.name}...")
+                        self.save_local_memory(
+                            reviewer.name,
+                            "Violating Postgres table cart_items schema - discount_applied does not exist."
+                        )
+                    else:
+                        raise e
 
         # 3. Register outcome in ConsensusTracker
         outcome = "approved" if round_passed else "failed"

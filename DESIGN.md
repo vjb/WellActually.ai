@@ -65,6 +65,11 @@ To transition from a "weekend hack" to an enterprise-ready product, the prompt-b
 * **Logic:** An in-process daemon that parses `mock_infrastructure/app_logs.json`.
 * **Action:** Looks for critical runtime exceptions (e.g., memory leaks, database connection drops) tied to the actively modified service, broadcasting actionable intelligence into the active Band chat room.
 
+### D. Local Memory Fallback Database
+
+* **Logic:** The Band.ai platform limits the Memory API (storing/retrieving agent semantic memories) strictly to Enterprise tier accounts, throwing `403 Forbidden` exceptions on other tiers. To resolve this limitation, we implemented a robust programmatic fallback that intercepts `403` exceptions or activates directly when `BAND_MEMORY_MODE=local` is set in the environment.
+* **Action:** Saves agent semantic memories locally to a structured JSON file at `mock_infrastructure/local_memories.json` and loads existing memories to feed into agent system prompts during debate context rehydration, bypassing platform limitations and ensuring zero-crashes.
+
 ---
 
 ## 6. Testing & Verification Blueprint

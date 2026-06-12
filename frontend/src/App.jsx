@@ -16,7 +16,7 @@ function App() {
   const [activeTab, setActiveTab] = useState("debate"); // "debate" or "code" or "logs"
   const [isStarting, setIsStarting] = useState(false);
   
-  const debateEndRef = useRef(null);
+  const chatContainerRef = useRef(null);
 
   // Poll server state
   useEffect(() => {
@@ -65,12 +65,12 @@ function App() {
     fetchTelemetry();
   }, [status]);
 
-  // Scroll to bottom of debate chat
+  // Scroll to bottom of debate chat only when a new message arrives
   useEffect(() => {
-    if (debateEndRef.current) {
-      debateEndRef.current.scrollIntoView({ behavior: "smooth" });
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
-  }, [events]);
+  }, [events.length]);
 
   const handleStart = async () => {
     setIsStarting(true);
@@ -408,7 +408,7 @@ function App() {
           </div>
 
           {activeTab === "debate" ? (
-            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", paddingRight: "0.5rem" }}>
+            <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", paddingRight: "0.5rem" }}>
               {events.length === 0 ? (
                 <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontStyle: "italic", fontSize: "0.95rem" }}>
                   Swarm Room inactive. Press Start to initiate.
@@ -451,7 +451,7 @@ function App() {
                   );
                 })
               )}
-              <div ref={debateEndRef} />
+
             </div>
           ) : (
             <div style={{ flex: 1, overflow: "auto", backgroundColor: "#04060a", borderRadius: "8px", padding: "1rem" }}>

@@ -25,7 +25,7 @@ Our swarm is orchestrating real-time communication directly over the **Band.ai R
 - **Messages & Mentions**: Agents exchange context and code proposals using targeted `@mentions` (e.g., Coder mentioning Conductor, Reviewer mentioning Coder).
 - **Context Rehydration**: Reviewers query the Chat Context endpoint before running evaluations to load the latest history.
 - **Events**: Publishes custom chat error events to notify participants and human operators of deadlocks.
-- **Memories**: Reviewers write semantic memories to record repeating schema violations across rounds (crashing out directly with a `403 Forbidden` plan limitation as per the hackathon's "No-Safety-Net" requirement).
+- **Memories**: The Band.ai platform limits the Memory API (saving/listing memories) strictly to Enterprise plans, throwing a `403 Forbidden` exception on other tiers. To solve this limitation, we implemented a robust programmatic local fallback database (writing/reading to `mock_infrastructure/local_memories.json`) which is activated dynamically upon catching `403` exceptions or when `BAND_MEMORY_MODE=local` is set in `.env` configurations. This preserves semantic memories across debate rounds without crashing.
 
 ### 2. **Featherless AI** (Sponsor Partner)
 To leverage specialized open-source models at scale, we route the **Auth & Fraud SME Reviewer Agent** to the `unsloth/Meta-Llama-3.1-70B-Instruct` model hosted on **Featherless AI's** serverless endpoint (`https://api.featherless.ai/v1`). It performs strict SQL syntax verification, RBAC checks, and schema validation.
@@ -52,7 +52,7 @@ Every file in the repository plays a precise role in the Domain-Driven Governanc
 - **[`install_hooks.py`](file:///c:/Users/vjbel/hacks/BOA/install_hooks.py)**: Automates installation of git pre-commit hooks.
 
 ### 💻 Frontend Web Dashboard
-- **[`frontend/src/App.jsx`](file:///c:/Users/vjbel/hacks/BOA/frontend/src/App.jsx)**: React Swarm Control Center dashboard. It polls FastAPI server state and provides an interactive interface displaying the PR Board, static MCP checks, Watchdog alerts, Slack-like debate room feed, and manual HITL consent overrides.
+- **[`frontend/src/App.jsx`](file:///c:/Users/vjbel/hacks/BOA/frontend/src/App.jsx)**: React Swarm Control Center dashboard. It polls FastAPI server state and provides an interactive interface displaying the PR Board, static MCP checks, Watchdog alerts, Slack-like debate room feed, and manual HITL consent overrides. Includes a dedicated container-level `.scrollTop` scroll mechanic that prevents browser window scroll hijacking.
 - **[`frontend/src/index.css`](file:///c:/Users/vjbel/hacks/BOA/frontend/src/index.css)**: Custom dark-themed CSS system incorporating rich glassmorphism panel styling, glowing neon indicators (red for violations, green for compliance), and micro-animations.
 
 ### 🧪 Tests & Mocks

@@ -1,0 +1,12 @@
+# Codeband Adversarial Governance Swarm CODEOWNERS
+# Designates high-stakes security and billing pathways requiring human review.
+
+# High-Stakes Authentication and Security Pathways
+/src/auth/                      @security-owners-pool  [high-stakes]
+
+# High-Stakes Financial Billing and Checkout Pathways
+/src/billing/                   @billing-owners-pool   [high-stakes]
+
+# Cart and Inventory SME Pathways
+/src/cart/                      @cart-owners-pool
+/src/inventory/                 @inventory-owners-pool

@@ -1,0 +1,69 @@
+repo:
+  url: https://github.com/example/myrepo.git
+  branch: main
+agents:
+  conductor:
+    framework: claude_sdk
+    model: claude-sonnet-4-6
+  mergemaster:
+    framework: claude_sdk
+    model: claude-sonnet-4-6
+    test_command: pytest
+    review_guidelines: null
+    auto_merge: low
+  planners:
+    claude_sdk:
+      count: 1
+      model: claude-sonnet-4-6
+      description: "Conductor task planner"
+    codex:
+      count: 0
+  plan_reviewers:
+    claude_sdk:
+      count: 0
+    codex:
+      count: 1
+      model: gpt-5.4
+      description: "Adversarial plan reviewer"
+  coders:
+    claude_sdk:
+      count: 1
+      model: claude-opus-4-7
+      description: "Claude Code agent. Strong at complex reasoning and auth implementation."
+    codex:
+      count: 1
+      model: gpt-5.4
+      description: "Codex coder agent. Fast at database schemas and inventory concurrency."
+  reviewers:
+    claude_sdk:
+      count: 1
+      model: claude-sonnet-4-6
+      description: "Cart SME. Protects stateful checkout pipelines and OpenAPI endpoint signatures."
+    codex:
+      count: 2
+      model: gpt-5.4
+      description: "Security/Auth and Inventory concurrency reviewer pool."
+    review_guidelines: |
+      You operate within a Domain-Driven Adversarial Governance swarm with specialized personas:
+      - reviewer-claude_sdk-0 (Cart SME): Protects checkout stateful pipelines and microservice endpoints using OpenAPI contracts.
+      - reviewer-codex-0 (Auth & Fraud SME): Validates SQL schemas, RBAC boundaries, database constraints, and authentication rules.
+      - reviewer-codex-1 (Inventory SME): Checks locks, cache layouts, and concurrency behaviors using Redis layout to prevent overselling.
+      Every PR must be evaluated under these bounded contexts. If any check fails, log a Review FAILED verdict with details.
+  watchdog:
+    check_interval_seconds: 120
+    stale_threshold_seconds: 300
+    nudge_grace_seconds: 60
+    nudge_suppression_seconds: 1800
+    role_stale_thresholds:
+      coder: 900
+      mergemaster: 900
+    swarm_idle_grace_seconds: 1800
+workspace:
+  path: .codeband
+  worktree_prefix: codeband
+  mode: local
+band:
+  rest_url: https://app.band.ai
+  ws_url: wss://app.band.ai/api/v1/socket/websocket
+  memory_mode: local
+  liveness_mode: auto

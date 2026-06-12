@@ -1,0 +1,63 @@
+{
+  "namespaces": {
+    "auth": {
+      "prefix": "auth:session:",
+      "description": "User active sessions and role-binding cache.",
+      "keys": {
+        "auth:session:{session_token}": {
+          "type": "hash",
+          "fields": {
+            "user_id": "string (UUID)",
+            "role": "string (guest|customer|support|admin|super_admin)",
+            "scopes": "list[string]",
+            "expires_at": "string (ISO8601)"
+          },
+          "ttl_seconds": 3600,
+          "criticality": "high"
+        }
+      }
+    },
+    "inventory": {
+      "prefix": "inventory:",
+      "description": "Stock management and distributed locking keys to prevent overselling.",
+      "keys": {
+        "inventory:lock:{product_sku}": {
+          "type": "string",
+          "value": "string (UUID client holding the lock)",
+          "ttl_seconds": 5,
+          "purpose": "Distributed mutex lock for checkout process to avoid concurrency race conditions.",
+          "criticality": "critical"
+        },
+        "inventory:stock:{product_sku}": {
+          "type": "string (integer)",
+          "value": "integer (cached stock level)",
+          "ttl_seconds": 300,
+          "purpose": "Real-time read cache for inventory count.",
+          "criticality": "high"
+        },
+        "inventory:pending_allocations:{cart_id}": {
+          "type": "hash",
+          "fields": {
+            "sku": "quantity (integer)"
+          },
+          "ttl_seconds": 600,
+          "purpose": "Temporary hold of inventory before billing completion.",
+          "criticality": "medium"
+        }
+      }
+    },
+    "rate_limit": {
+      "prefix": "rate_limit:",
+      "description": "API Gateway client rate limiting windows.",
+      "keys": {
+        "rate_limit:{ip_address}:{endpoint}": {
+          "type": "zset",
+          "value": "timestamps of requests",
+          "ttl_seconds": 60,
+          "purpose": "Sliding window rate limit logs.",
+          "criticality": "medium"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+agents:
+  conductor:
+    agent_id: "agent_conductor_uuid"
+    api_key: "band_u_1781279208_5YRa2VhoiBN6xARpWsx7dyT7j8hxM0yG"
+  mergemaster:
+    agent_id: "agent_mergemaster_uuid"
+    api_key: "api_key_mergemaster"
+  planner-claude_sdk-0:
+    agent_id: "agent_planner_uuid"
+    api_key: "api_key_planner"
+  plan_reviewer-codex-0:
+    agent_id: "agent_plan_reviewer_uuid"
+    api_key: "api_key_plan_reviewer"
+  coder-claude_sdk-0:
+    agent_id: "agent_coder_claude_uuid"
+    api_key: "api_key_coder_claude"
+  coder-codex-0:
+    agent_id: "agent_coder_codex_uuid"
+    api_key: "api_key_coder_codex"
+  reviewer-claude_sdk-0:
+    agent_id: "agent_reviewer_claude_uuid"
+    api_key: "api_key_reviewer_claude"
+  reviewer-codex-0:
+    agent_id: "agent_reviewer_codex_0_uuid"
+    api_key: "api_key_reviewer_codex_0"
+  reviewer-codex-1:
+    agent_id: "agent_reviewer_codex_1_uuid"
+    api_key: "api_key_reviewer_codex_1"

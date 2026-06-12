@@ -1,0 +1,41 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Adversarial Swarm API Contract",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/checkout": {
+      "post": {
+        "summary": "Process checkout",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "cart_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "payment_method_token": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "cart_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Checkout successful"
+          }
+        }
+      }
+    }
+  }
+}

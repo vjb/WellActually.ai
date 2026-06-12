@@ -1,0 +1,32 @@
+# Environment keys and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environment and caches
+.venv/
+venv/
+ENV/
+__pycache__/
+*.pyc
+.pytest_cache/
+.agents/
+
+# Node dependencies and build outputs
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Logs and temp files
+*.log
+.eslintcache
+
+# Editor configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

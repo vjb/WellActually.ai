@@ -1,4 +1,88 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+
+// Lightweight Python syntax highlighter
+function highlightPython(code) {
+  if (!code) return null;
+  const keywords = new Set(['def', 'class', 'import', 'from', 'return', 'if', 'elif', 'else', 'for', 'while', 'try', 'except', 'finally', 'with', 'as', 'raise', 'pass', 'break', 'continue', 'and', 'or', 'not', 'in', 'is', 'None', 'True', 'False', 'lambda', 'yield', 'async', 'await', 'global', 'nonlocal', 'del', 'assert']);
+  const builtins = new Set(['print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple', 'type', 'isinstance', 'getattr', 'setattr', 'hasattr', 'super', 'open', 'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed', 'any', 'all', 'min', 'max', 'sum', 'abs', 'round', 'format', 'input', 'id', 'hex', 'oct', 'bin', 'chr', 'ord', 'repr', 'hash', 'next', 'iter', 'object', 'property', 'staticmethod', 'classmethod', 'ValueError', 'TypeError', 'KeyError', 'IndexError', 'AttributeError', 'Exception', 'RuntimeError', 'StopIteration', 'NotImplementedError']);
+  
+  // Tokenize with regex
+  const tokenPattern = /("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')|(#[^\n]*)|(\b\d+\.?\d*\b)|(@\w+)|(\b(?:def|class)\s+)(\w+)|(\b\w+(?=\s*\())|([\w]+)/g;
+  
+  const spans = [];
+  let lastIndex = 0;
+  let match;
+  
+  while ((match = tokenPattern.exec(code)) !== null) {
+    // Add any text between matches as plain
+    if (match.index > lastIndex) {
+      spans.push({ text: code.slice(lastIndex, match.index), color: '#e5e7eb' });
+    }
+    
+    if (match[1]) { // Strings
+      spans.push({ text: match[0], color: '#a3e635' });
+    } else if (match[2]) { // Comments
+      spans.push({ text: match[0], color: '#6b7280', italic: true });
+    } else if (match[3]) { // Numbers
+      spans.push({ text: match[0], color: '#fb923c' });
+    } else if (match[4]) { // Decorators
+      spans.push({ text: match[0], color: '#fbbf24' });
+    } else if (match[5]) { // def/class keyword followed by name
+      spans.push({ text: match[5], color: '#c084fc' });
+      spans.push({ text: match[6], color: '#67e8f9' });
+    } else if (match[7]) { // Function calls
+      if (builtins.has(match[7])) {
+        spans.push({ text: match[0], color: '#67e8f9' });
+      } else {
+        spans.push({ text: match[0], color: '#93c5fd' });
+      }
+    } else if (match[8]) { // Words
+      if (keywords.has(match[8])) {
+        spans.push({ text: match[0], color: '#c084fc', bold: true });
+      } else if (builtins.has(match[8])) {
+        spans.push({ text: match[0], color: '#67e8f9' });
+      } else {
+        spans.push({ text: match[0], color: '#e5e7eb' });
+      }
+    } else {
+      spans.push({ text: match[0], color: '#e5e7eb' });
+    }
+    lastIndex = match.index + match[0].length;
+  }
+  
+  // Trailing text
+  if (lastIndex < code.length) {
+    spans.push({ text: code.slice(lastIndex), color: '#e5e7eb' });
+  }
+  
+  return spans.map((s, i) => (
+    React.createElement('span', {
+      key: i,
+      style: {
+        color: s.color,
+        fontWeight: s.bold ? 'bold' : 'normal',
+        fontStyle: s.italic ? 'italic' : 'normal'
+      }
+    }, s.text)
+  ));
+}
+
+function HighlightedCode({ code }) {
+  const highlighted = useMemo(() => highlightPython(code), [code]);
+  return React.createElement('pre', {
+    style: {
+      margin: '0.5rem 0 0 0',
+      padding: '0.75rem',
+      borderRadius: '6px',
+      backgroundColor: '#0a0c12',
+      overflowX: 'auto',
+      fontFamily: "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace",
+      fontSize: '0.82rem',
+      lineHeight: '1.6',
+      border: '1px solid rgba(255,255,255,0.06)'
+    }
+  }, highlighted);
+}
 
 function App() {
   const [status, setStatus] = useState("IDLE");
@@ -377,7 +461,7 @@ function App() {
                   fontWeight: "bold",
                   cursor: "pointer",
                   fontSize: "1rem",
-                  borderBottom: activeTab === "debate" ? "2px solid #06b6d4" : "none",
+                  borderBottom: activeTab === "debate" ? "2px solid #06b6d4" : "2px solid transparent",
                   paddingBottom: "0.5rem"
                 }}
               >
@@ -392,7 +476,7 @@ function App() {
                   fontWeight: "bold",
                   cursor: "pointer",
                   fontSize: "1rem",
-                  borderBottom: activeTab === "code" ? "2px solid #06b6d4" : "none",
+                  borderBottom: activeTab === "code" ? "2px solid #06b6d4" : "2px solid transparent",
                   paddingBottom: "0.5rem"
                 }}
               >
@@ -439,9 +523,7 @@ function App() {
                       </div>
                       
                       {evt.message.includes("def ") ? (
-                        <pre style={{ margin: "0.5rem 0 0 0", padding: "0.5rem", borderRadius: "4px", backgroundColor: "#04060a", overflowX: "auto", fontFamily: "monospace", fontSize: "0.8rem", color: "#a78bfa" }}>
-                          {evt.message}
-                        </pre>
+                        <HighlightedCode code={evt.message} />
                       ) : (
                         <p style={{ margin: 0, fontSize: "0.85rem", color: "#e5e7eb", whiteSpace: "pre-wrap" }}>
                           {evt.message}
@@ -456,9 +538,7 @@ function App() {
           ) : (
             <div style={{ flex: 1, overflow: "auto", backgroundColor: "#04060a", borderRadius: "8px", padding: "1rem" }}>
               {currentCode ? (
-                <pre style={{ margin: 0, fontFamily: "monospace", fontSize: "0.85rem", color: "#a78bfa", whiteSpace: "pre-wrap" }}>
-                  {currentCode}
-                </pre>
+                <HighlightedCode code={currentCode} />
               ) : (
                 <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontStyle: "italic", fontSize: "0.95rem" }}>
                   No code proposed in current session.

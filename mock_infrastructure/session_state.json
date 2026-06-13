@@ -22,8 +22,19 @@
     "api_endpoint": "/api/v1/billing/spending",
     "rbac_target": "billing_profiles.spending_limit_usd"
   },
-  "generation": 10,
+  "generation": 13,
   "human_consent": null,
   "events": [],
-  "watchdog_logs": []
+  "active_agents": [],
+  "watchdog_logs": [],
+  "repo": null,
+  "pr_number": null,
+  "pr_diff": null,
+  "pr_title": null,
+  "pr_branch": null,
+  "loaded_file_contents": {},
+  "reviewer_auth_role": "Auth & Fraud SME",
+  "reviewer_auth_domain": "auth",
+  "reviewer_cart_role": "Cart SME",
+  "reviewer_cart_domain": "cart"
 }

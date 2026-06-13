@@ -291,10 +291,12 @@ def verify_schema_compliance(code_content: str, schema_path: str) -> dict:
 
     use_real = config.get("USE_REAL_DB", default="false").lower() == "true"
     db_url = config.get("DATABASE_URL")
+    postgres_success = False
 
     if use_real and db_url:
         if _SCHEMA_CACHE is not None:
             schema_columns = _SCHEMA_CACHE
+            postgres_success = True
             logger.info("Using cached schema columns from live PostgreSQL database.")
         else:
             logger.info(f"Connecting to live Postgres MCP server for schema checks: {db_url}")
@@ -315,14 +317,50 @@ def verify_schema_compliance(code_content: str, schema_path: str) -> dict:
                             schema_columns[table] = set()
                         schema_columns[table].add(column)
                 _SCHEMA_CACHE = schema_columns
+                postgres_success = True
                 logger.info(f"Successfully loaded and cached {len(schema_columns)} tables from live PostgreSQL database via MCP.")
             except Exception as e:
-                logger.warning(f"Failed to fetch schema from live Postgres MCP server, falling back to local file. Reason: {e}")
+                logger.error(f"Failed to fetch schema from live Postgres MCP server: {e}")
                 schema_columns = {}
             finally:
                 client.close()
 
-    # Fallback to local file parsing if live DB checks failed or are disabled
+        if not postgres_success or not schema_columns:
+            return {
+                "compliant": False,
+                "violations": ["Failed to connect or retrieve schema from live PostgreSQL database via MCP. (No fallbacks allowed when USE_REAL_DB=true)"],
+                "checked_columns": []
+            }
+
+    # Fallback to SQLite MCP server only if PostgreSQL checks are disabled (USE_REAL_DB=false)
+    if not use_real:
+        logger.info("Connecting to fallback SQLite MCP server for schema checks...")
+        import sys
+        server_script = os.path.join(os.path.dirname(__file__), "mcp_sqlite_server.py")
+        client = MCPClient(sys.executable, [server_script])
+        try:
+            client.start()
+            res = client.call_tool("query", {
+                "sql": "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public';"
+            })
+            content = res.get("content", [])
+            if content and content[0].get("type") == "text":
+                text_data = content[0].get("text", "[]")
+                records = json.loads(text_data)
+                for rec in records:
+                    table = rec.get("table_name").lower()
+                    column = rec.get("column_name").lower()
+                    if table not in schema_columns:
+                        schema_columns[table] = set()
+                    schema_columns[table].add(column)
+            logger.info(f"Successfully loaded {len(schema_columns)} tables from fallback SQLite MCP server.")
+        except Exception as e:
+            logger.warning(f"Failed to fetch schema from fallback SQLite MCP server, falling back to local file. Reason: {e}")
+            schema_columns = {}
+        finally:
+            client.close()
+
+    # Fallback to local file parsing if everything else failed
     if not schema_columns:
         if not os.path.exists(schema_path):
             return {
@@ -374,6 +412,9 @@ def verify_schema_compliance(code_content: str, schema_path: str) -> dict:
         "primary", "key", "foreign", "references", "table", "create", "drop", "alter"
     }
 
+    checked_columns_list = []
+    seen_checked = set()
+
     for query in sql_queries:
         # Clean comments from the query
         query_clean = re.sub(r'/\*.*?\*/', '', query, flags=re.DOTALL)
@@ -387,60 +428,6 @@ def verify_schema_compliance(code_content: str, schema_path: str) -> dict:
 
         if not referenced_tables:
             continue
-
-        # Check for INSERT columns
-        insert_matches = list(re.finditer(r"INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)", query_clean, re.IGNORECASE))
-        for match in insert_matches:
-            target_table = match.group(1).lower()
-            if target_table in schema_columns:
-                # Extract columns
-                cols = [c.strip().strip("'\"`").lower() for c in match.group(2).split(",")]
-                for col in cols:
-                    if col not in schema_columns[target_table]:
-                        violations.append(f"Column '{col}' does not exist in table '{target_table}' schema")
-
-        # Check for SELECT columns (explicit list, ignore SELECT *)
-        select_matches = list(re.finditer(r"SELECT\s+(.+?)\s+FROM\s+", query_clean, re.IGNORECASE | re.DOTALL))
-        for match in select_matches:
-            cols_str = match.group(1).strip()
-            if cols_str == "*":
-                continue
-            
-            # Split select list, stripping aliases, expressions, and functions
-            # e.g., bp.spending_limit_usd -> spending_limit_usd
-            # e.g., COUNT(*) -> skip/ignore
-            # e.g., bp.spending_limit_usd AS limit -> spending_limit_usd
-            select_items = cols_str.split(",")
-            for item in select_items:
-                item_clean = item.strip()
-                # Ignore SQL function calls like COUNT(*), MAX(...)
-                if "(" in item_clean:
-                    continue
-                # Remove AS alias
-                item_clean = re.split(r'\s+AS\s+', item_clean, flags=re.IGNORECASE)[0].strip()
-                # Remove trailing words if alias defined without AS: e.g. "bp.spending_limit_usd limit"
-                item_clean = item_clean.split()[-1] if len(item_clean.split()) > 1 else item_clean
-                
-                # Strip qualifiers: e.g. bp.spending_limit_usd -> spending_limit_usd
-                if "." in item_clean:
-                    item_clean = item_clean.split(".")[-1]
-                
-                col_name = item_clean.strip("'\"`").lower()
-                
-                # Verify if this column exists in at least one of the referenced tables
-                col_found = False
-                for tbl in referenced_tables:
-                    if col_name in schema_columns[tbl]:
-                        col_found = True
-                        break
-                
-                # Special exceptions for identifiers like *
-                if col_name == "*" or not col_name.isidentifier():
-                    continue
-
-                if not col_found:
-                    # Report violation against the first referenced table
-                    violations.append(f"Column '{col_name}' does not exist in table '{referenced_tables[0]}' schema")
 
         # Clean string literals to prevent checking strings (like 'active', 'completed') as identifiers
         query_temp = re.sub(r"'(?:''|[^'])*'", " ", query_clean)
@@ -468,6 +455,95 @@ def verify_schema_compliance(code_content: str, schema_path: str) -> dict:
                     aliases.add(alias)
                     alias_to_table[alias] = table_name
 
+        # Check for INSERT columns
+        insert_matches = list(re.finditer(r"INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)", query_clean, re.IGNORECASE))
+        for match in insert_matches:
+            target_table = match.group(1).lower()
+            if target_table in schema_columns:
+                # Extract columns
+                cols = [c.strip().strip("'\"`").lower() for c in match.group(2).split(",")]
+                for col in cols:
+                    compliant = col in schema_columns[target_table]
+                    if (target_table, col) not in seen_checked:
+                        seen_checked.add((target_table, col))
+                        checked_columns_list.append({
+                            "table": target_table,
+                            "column": col,
+                            "compliant": compliant
+                        })
+                    if not compliant:
+                        violations.append(f"Column '{col}' does not exist in table '{target_table}' schema")
+
+        # Check for SELECT columns (explicit list, ignore SELECT *)
+        select_matches = list(re.finditer(r"SELECT\s+(.+?)\s+FROM\s+", query_clean, re.IGNORECASE | re.DOTALL))
+        for match in select_matches:
+            cols_str = match.group(1).strip()
+            if cols_str == "*":
+                continue
+            
+            # Split select list, stripping aliases, expressions, and functions
+            # e.g., bp.spending_limit_usd -> spending_limit_usd
+            # e.g., COUNT(*) -> skip/ignore
+            # e.g., bp.spending_limit_usd AS limit -> spending_limit_usd
+            select_items = cols_str.split(",")
+            for item in select_items:
+                item_clean = item.strip()
+                # Ignore SQL function calls like COUNT(*), MAX(...)
+                if "(" in item_clean:
+                    continue
+                # Remove AS alias
+                item_clean = re.split(r'\s+AS\s+', item_clean, flags=re.IGNORECASE)[0].strip()
+                # Remove trailing words if alias defined without AS: e.g. "bp.spending_limit_usd limit"
+                item_clean = item_clean.split()[-1] if len(item_clean.split()) > 1 else item_clean
+                
+                # Strip qualifiers: e.g. bp.spending_limit_usd -> spending_limit_usd
+                qualifier = None
+                if "." in item_clean:
+                    parts = item_clean.split(".")
+                    qualifier = parts[0].strip().strip("'\"`").lower()
+                    item_clean = parts[-1]
+                
+                col_name = item_clean.strip("'\"`").lower()
+                
+                # Special exceptions for identifiers like *
+                if col_name == "*" or not col_name.isidentifier():
+                    continue
+
+                # Determine which table this column is associated with
+                target_table = None
+                if qualifier:
+                    if qualifier in schema_columns:
+                        target_table = qualifier
+                    elif qualifier in alias_to_table:
+                        target_table = alias_to_table[qualifier]
+                
+                col_found = False
+                if target_table:
+                    if col_name in schema_columns[target_table]:
+                        col_found = True
+                else:
+                    # Search referenced tables
+                    for tbl in referenced_tables:
+                        if col_name in schema_columns[tbl]:
+                            col_found = True
+                            target_table = tbl
+                            break
+                    if not target_table and referenced_tables:
+                        target_table = referenced_tables[0]
+
+                if target_table:
+                    if (target_table, col_name) not in seen_checked:
+                        seen_checked.add((target_table, col_name))
+                        checked_columns_list.append({
+                            "table": target_table,
+                            "column": col_name,
+                            "compliant": col_found
+                        })
+
+                if not col_found:
+                    # Report violation against the first referenced table
+                    violations.append(f"Column '{col_name}' does not exist in table '{target_table or referenced_tables[0]}' schema")
+
         # Check WHERE, JOIN, and ORDER BY clauses for general token violations
         # Find all words/identifiers in the query that are NOT followed by a parenthesis
         all_words = re.findall(r'\b(?:([a-zA-Z_]\w*)\.)?([a-zA-Z_]\w*)\b(?!\s*\()', query_temp)
@@ -491,14 +567,46 @@ def verify_schema_compliance(code_content: str, schema_path: str) -> dict:
                     is_valid_db_column = True
                     break
 
+            target_table = None
+            col_found = False
+
+            if prefix_lower:
+                if prefix_lower in schema_columns:
+                    target_table = prefix_lower
+                    col_found = word_lower in schema_columns[prefix_lower]
+                elif prefix_lower in alias_to_table:
+                    target_table = alias_to_table[prefix_lower]
+                    col_found = word_lower in schema_columns[target_table]
+                else:
+                    target_table = referenced_tables[0]
+                    if is_valid_db_column:
+                        col_found = any(word_lower in schema_columns[tbl] for tbl in referenced_tables)
+                    else:
+                        col_found = False
+            else:
+                target_table = referenced_tables[0]
+                if is_valid_db_column:
+                    col_found = any(word_lower in schema_columns[tbl] for tbl in referenced_tables)
+                else:
+                    col_found = False
+
+            if target_table:
+                if (target_table, word_lower) not in seen_checked:
+                    seen_checked.add((target_table, word_lower))
+                    checked_columns_list.append({
+                        "table": target_table,
+                        "column": word_lower,
+                        "compliant": col_found
+                    })
+
             if prefix_lower:
                 if prefix_lower in schema_columns:
                     if word_lower not in schema_columns[prefix_lower]:
                         violations.append(f"Column '{word_lower}' does not exist in table '{prefix_lower}' schema")
                 elif prefix_lower in alias_to_table:
-                    target_table = alias_to_table[prefix_lower]
-                    if word_lower not in schema_columns[target_table]:
-                        violations.append(f"Column '{word_lower}' does not exist in table '{target_table}' schema")
+                    target_table_act = alias_to_table[prefix_lower]
+                    if word_lower not in schema_columns[target_table_act]:
+                        violations.append(f"Column '{word_lower}' does not exist in table '{target_table_act}' schema")
                 else:
                     if is_valid_db_column:
                         in_referenced = any(word_lower in schema_columns[tbl] for tbl in referenced_tables)
@@ -524,7 +632,8 @@ def verify_schema_compliance(code_content: str, schema_path: str) -> dict:
 
     return {
         "compliant": len(deduped_violations) == 0,
-        "violations": deduped_violations
+        "violations": deduped_violations,
+        "checked_columns": checked_columns_list
     }
 
 

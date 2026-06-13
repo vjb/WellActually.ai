@@ -1,93 +1,663 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const POLL_INTERVAL_MS = 1000;
 
-// Lightweight Python syntax highlighter
+// ─── Utility: Python Syntax Highlighter ────────────────────────────────
 function highlightPython(code) {
   if (!code) return null;
   const keywords = new Set(['def', 'class', 'import', 'from', 'return', 'if', 'elif', 'else', 'for', 'while', 'try', 'except', 'finally', 'with', 'as', 'raise', 'pass', 'break', 'continue', 'and', 'or', 'not', 'in', 'is', 'None', 'True', 'False', 'lambda', 'yield', 'async', 'await', 'global', 'nonlocal', 'del', 'assert']);
   const builtins = new Set(['print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple', 'type', 'isinstance', 'getattr', 'setattr', 'hasattr', 'super', 'open', 'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed', 'any', 'all', 'min', 'max', 'sum', 'abs', 'round', 'format', 'input', 'id', 'hex', 'oct', 'bin', 'chr', 'ord', 'repr', 'hash', 'next', 'iter', 'object', 'property', 'staticmethod', 'classmethod', 'ValueError', 'TypeError', 'KeyError', 'IndexError', 'AttributeError', 'Exception', 'RuntimeError', 'StopIteration', 'NotImplementedError']);
-  
-  // Tokenize with regex
-  const tokenPattern = /("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')|(#[^\n]*)|(\b\d+\.?\d*\b)|(@\w+)|(\b(?:def|class)\s+)(\w+)|(\b\w+(?=\s*\())|([\w]+)/g;
-  
+  const tokenPattern = /("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')|(#[^\n]*)|(\b\d+\.?\d*\b)|(@\w+)|(\b(?:def|class)\s+)(\w+)|(\b\w+(?=\s*\())|([.\w]+)/g;
   const spans = [];
   let lastIndex = 0;
   let match;
-  
   while ((match = tokenPattern.exec(code)) !== null) {
-    // Add any text between matches as plain
-    if (match.index > lastIndex) {
-      spans.push({ text: code.slice(lastIndex, match.index), color: '#e5e7eb' });
-    }
-    
-    if (match[1]) { // Strings
-      spans.push({ text: match[0], color: '#a3e635' });
-    } else if (match[2]) { // Comments
-      spans.push({ text: match[0], color: '#6b7280', italic: true });
-    } else if (match[3]) { // Numbers
-      spans.push({ text: match[0], color: '#fb923c' });
-    } else if (match[4]) { // Decorators
-      spans.push({ text: match[0], color: '#fbbf24' });
-    } else if (match[5]) { // def/class keyword followed by name
-      spans.push({ text: match[5], color: '#c084fc' });
-      spans.push({ text: match[6], color: '#67e8f9' });
-    } else if (match[7]) { // Function calls
-      if (builtins.has(match[7])) {
-        spans.push({ text: match[0], color: '#67e8f9' });
-      } else {
-        spans.push({ text: match[0], color: '#93c5fd' });
-      }
-    } else if (match[8]) { // Words
-      if (keywords.has(match[8])) {
-        spans.push({ text: match[0], color: '#c084fc', bold: true });
-      } else if (builtins.has(match[8])) {
-        spans.push({ text: match[0], color: '#67e8f9' });
-      } else {
-        spans.push({ text: match[0], color: '#e5e7eb' });
-      }
-    } else {
-      spans.push({ text: match[0], color: '#e5e7eb' });
-    }
+    if (match.index > lastIndex) spans.push({ text: code.slice(lastIndex, match.index), color: '#e5e7eb' });
+    if (match[1]) spans.push({ text: match[0], color: '#a3e635' });
+    else if (match[2]) spans.push({ text: match[0], color: '#6b7280', italic: true });
+    else if (match[3]) spans.push({ text: match[0], color: '#fb923c' });
+    else if (match[4]) spans.push({ text: match[0], color: '#fbbf24' });
+    else if (match[5]) { spans.push({ text: match[5], color: '#c084fc' }); spans.push({ text: match[6], color: '#67e8f9' }); }
+    else if (match[7]) spans.push({ text: match[0], color: builtins.has(match[7]) ? '#67e8f9' : '#93c5fd' });
+    else if (match[8]) {
+      if (keywords.has(match[8])) spans.push({ text: match[0], color: '#c084fc', bold: true });
+      else if (builtins.has(match[8])) spans.push({ text: match[0], color: '#67e8f9' });
+      else spans.push({ text: match[0], color: '#e5e7eb' });
+    } else spans.push({ text: match[0], color: '#e5e7eb' });
     lastIndex = match.index + match[0].length;
   }
-  
-  // Trailing text
-  if (lastIndex < code.length) {
-    spans.push({ text: code.slice(lastIndex), color: '#e5e7eb' });
-  }
-  
+  if (lastIndex < code.length) spans.push({ text: code.slice(lastIndex), color: '#e5e7eb' });
   return spans.map((s, i) => (
-    React.createElement('span', {
-      key: i,
-      style: {
-        color: s.color,
-        fontWeight: s.bold ? 'bold' : 'normal',
-        fontStyle: s.italic ? 'italic' : 'normal'
-      }
-    }, s.text)
+    <span key={i} style={{ color: s.color, fontWeight: s.bold ? 'bold' : 'normal', fontStyle: s.italic ? 'italic' : 'normal' }}>{s.text}</span>
   ));
 }
 
 function HighlightedCode({ code }) {
   const highlighted = useMemo(() => highlightPython(code), [code]);
-  return React.createElement('pre', {
-    style: {
-      margin: '0.5rem 0 0 0',
-      padding: '0.75rem',
-      borderRadius: '6px',
-      backgroundColor: '#0a0c12',
-      overflowX: 'auto',
-      fontFamily: "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace",
-      fontSize: '0.82rem',
-      lineHeight: '1.6',
-      border: '1px solid rgba(255,255,255,0.06)'
-    }
-  }, highlighted);
+  return (
+    <pre style={{ margin: '0.5rem 0 0 0', padding: '0.75rem', borderRadius: '8px', backgroundColor: '#080a10', overflowX: 'auto', fontFamily: "'JetBrains Mono', 'Fira Code', monospace", fontSize: '0.8rem', lineHeight: '1.6', border: '1px solid rgba(255,255,255,0.04)' }}>
+      {highlighted}
+    </pre>
+  );
 }
 
+// ─── Utility: Name / Message Helpers ───────────────────────────────────
+const getDomainIcon = (domain) => {
+  switch (domain?.toLowerCase()) {
+    case "security": return "🛡️";
+    case "database": return "🗄️";
+    case "documentation": return "📝";
+    case "cart": return "🛒";
+    case "billing": return "💳";
+    case "api": return "🔌";
+    case "qa": return "🧪";
+    case "workflow": return "🔄";
+    case "architecture": return "🏗️";
+    case "auth": return "🔐";
+    case "compliance": return "📋";
+    case "performance": return "⚡";
+    default: return "🤖";
+  }
+};
+
+const getDomainColor = (domain) => {
+  switch (domain?.toLowerCase()) {
+    case "auth": return "#a855f7";
+    case "billing": return "#f97316";
+    case "database": return "#6366f1";
+    case "security": return "#ef4444";
+    case "cart": return "#eab308";
+    case "api": return "#06b6d4";
+    case "qa": return "#ec4899";
+    case "documentation": return "#10b981";
+    case "architecture": return "#8b5cf6";
+    case "compliance": return "#f472b6";
+    case "performance": return "#f59e0b";
+    default: return "#8b5cf6";
+  }
+};
+
+const normalizeName = (name) => {
+  if (!name) return "";
+  return name.replace(/-[a-f0-9]{6,}$/i, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+};
+
+const cleanSenderName = (sender, role) => {
+  if (!sender) return sender;
+  if (role && role !== "SYSTEM") return role;
+  let clean = sender.replace(/-[a-f0-9]{6,}$/i, '');
+  if (clean.startsWith('reviewer-')) {
+    clean = clean.replace('reviewer-', '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()).replace(' And ', ' & ');
+  }
+  return clean;
+};
+
+const cleanMessageText = (text) => {
+  if (!text) return text;
+  return text.replace(/^\[.*?\]:\s*/i, '');
+};
+
+// ─── Pipeline Progress Indicator ───────────────────────────────────────
+const PHASES = [
+  { key: "ingest", icon: "🎯", label: "Ingest PR", color: "#06b6d4" },
+  { key: "analyze", icon: "🧠", label: "JIT Synthesis", color: "#a855f7" },
+  { key: "deploy", icon: "🔗", label: "Deploy Swarm", color: "#3b82f6" },
+  { key: "debate", icon: "⚔️", label: "Adversarial Debate", color: "#22c55e" },
+  { key: "verdict", icon: "📊", label: "Verdict", color: "#f59e0b" },
+];
+
+function getActivePhase(status, hasAgents, hasPrDetails) {
+  if (status === "IDLE") return hasPrDetails ? 0 : -1;
+  if (status === "TRIAGE") return 1;
+  if (status === "PENDING_HUMAN_APPROVAL") return 2;
+  if (status === "RUNNING") return hasAgents ? 3 : 2;
+  if (status === "COMPLETED" || status === "HALTED" || status === "CRASHED") return 4;
+  return -1;
+}
+
+function PipelineProgress({ activePhase }) {
+  return (
+    <div className="pipeline-bar" style={{ margin: "1.5rem 0" }}>
+      {PHASES.map((phase, i) => {
+        const isActive = i === activePhase;
+        const isCompleted = i < activePhase;
+        const dotClass = isActive ? "active" : isCompleted ? "completed" : "";
+        const labelClass = isActive ? "active" : isCompleted ? "completed" : "";
+
+        return (
+          <React.Fragment key={phase.key}>
+            {i > 0 && (
+              <div
+                className={`pipeline-connector ${isCompleted ? "completed" : isActive ? "active" : ""}`}
+                style={{
+                  "--connector-color": isCompleted ? phase.color : isActive ? phase.color : undefined
+                }}
+              />
+            )}
+            <div className="pipeline-phase">
+              <div
+                className={`pipeline-dot ${dotClass}`}
+                style={{ "--dot-color": phase.color }}
+              >
+                {isCompleted ? "✓" : phase.icon}
+              </div>
+              <span
+                className={`pipeline-label ${labelClass}`}
+                style={{ "--label-color": phase.color }}
+              >
+                {phase.label}
+              </span>
+            </div>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── JIT Synthesis Hero Panel ──────────────────────────────────────────
+function JITSynthesisPanel({ agents, status, isAnalyzing }) {
+  const reviewerAgents = agents.filter(a => a.id?.startsWith("reviewer"));
+
+  if (status === "IDLE" && !isAnalyzing && reviewerAgents.length === 0) {
+    return (
+      <section className="glass-panel jit-hero" style={{ textAlign: "center", padding: "3rem 2rem" }}>
+        <div style={{ fontSize: "3rem", marginBottom: "1rem", opacity: 0.6 }}>🧠</div>
+        <h2 style={{ margin: "0 0 0.75rem 0", fontSize: "1.4rem", background: "linear-gradient(135deg, #a855f7, #ec4899)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", fontWeight: 800 }}>
+          Just-in-Time Agent Synthesis
+        </h2>
+        <p style={{ margin: 0, color: "#9ca3af", fontSize: "0.9rem", maxWidth: "500px", marginLeft: "auto", marginRight: "auto", lineHeight: 1.6 }}>
+          When a PR arrives, the Conductor AI reads the diff, identifies domains & compliance regimes,
+          and <strong style={{ color: "#c084fc" }}>invents bespoke reviewer agents</strong> with custom prompts — in real time.
+          No pre-configured agents. Pure JIT governance compute.
+        </p>
+      </section>
+    );
+  }
+
+  if (isAnalyzing) {
+    return (
+      <section className="glass-panel jit-hero" style={{ padding: "2rem", position: "relative" }}>
+        {/* Scanning overlay effect */}
+        <div style={{
+          position: "absolute", top: 0, left: 0, right: 0, bottom: 0, overflow: "hidden",
+          borderRadius: "16px", pointerEvents: "none"
+        }}>
+          <div style={{
+            position: "absolute", left: 0, right: 0, height: "2px",
+            background: "linear-gradient(90deg, transparent, #a855f7, #ec4899, transparent)",
+            animation: "scan-line 2s ease-in-out infinite"
+          }} />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.5rem" }}>
+          <div style={{
+            width: "48px", height: "48px", borderRadius: "12px",
+            background: "linear-gradient(135deg, rgba(168,85,247,0.2), rgba(236,72,153,0.2))",
+            border: "1px solid rgba(168,85,247,0.3)",
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.5rem"
+          }}>🧠</div>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "1.2rem", fontWeight: 700, color: "#e5e7eb" }}>
+              Conductor is Analyzing the PR Diff...
+            </h2>
+            <p style={{ margin: "0.25rem 0 0 0", fontSize: "0.8rem", color: "#a855f7" }}>
+              Reading code changes, identifying domains, synthesizing custom agents
+            </p>
+          </div>
+        </div>
+
+        {/* Shimmer skeleton cards */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {[1, 2].map(i => (
+            <div key={i} className="shimmer" style={{
+              height: "70px", borderRadius: "12px",
+              border: "1px solid rgba(168,85,247,0.1)"
+            }} />
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  // Agents have materialized — show them with entrance animation
+  return (
+    <section className="glass-panel jit-hero" style={{ padding: "1.5rem" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.25rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <div style={{
+            width: "36px", height: "36px", borderRadius: "10px",
+            background: "linear-gradient(135deg, rgba(168,85,247,0.25), rgba(236,72,153,0.25))",
+            border: "1px solid rgba(168,85,247,0.3)",
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.1rem"
+          }}>🧠</div>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700, color: "#e5e7eb" }}>
+              JIT Synthesized Agents
+            </h2>
+            <span style={{ fontSize: "0.72rem", color: "#a855f7" }}>
+              {reviewerAgents.length} custom agent{reviewerAgents.length !== 1 ? 's' : ''} materialized from PR diff analysis
+            </span>
+          </div>
+        </div>
+        <span style={{
+          fontSize: "0.65rem", fontWeight: 700, padding: "0.2rem 0.6rem", borderRadius: "6px",
+          background: "linear-gradient(135deg, rgba(168,85,247,0.2), rgba(236,72,153,0.2))",
+          border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc",
+          textTransform: "uppercase", letterSpacing: "0.1em"
+        }}>
+          ⚡ JIT Created
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        {reviewerAgents.map((agent) => {
+          const isLlama = agent.model?.includes("Llama");
+          const modelLabel = isLlama ? "Llama-3.1-70B via Featherless AI" : `${agent.model || "GPT-4o-mini"} via AIML API`;
+          const domainColor = getDomainColor(agent.domain);
+
+          return (
+            <div key={agent.id} className="agent-card-materialize" style={{
+              padding: "1rem",
+              borderRadius: "12px",
+              background: `linear-gradient(135deg, ${domainColor}08, ${domainColor}03, rgba(13,19,33,0.6))`,
+              border: `1px solid ${domainColor}30`,
+              position: "relative",
+              overflow: "hidden"
+            }}>
+              {/* Accent stripe */}
+              <div style={{
+                position: "absolute", top: 0, left: 0, bottom: 0, width: "3px",
+                background: domainColor, borderRadius: "3px 0 0 3px"
+              }} />
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem", paddingLeft: "0.75rem" }}>
+                <div>
+                  <span style={{ fontWeight: 700, color: "#f3f4f6", fontSize: "0.95rem" }}>
+                    {getDomainIcon(agent.domain)} {agent.role}
+                  </span>
+                  <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.35rem", flexWrap: "wrap" }}>
+                    <span style={{
+                      fontSize: "0.65rem", padding: "0.1rem 0.4rem", borderRadius: "4px",
+                      background: `${domainColor}18`, color: domainColor, border: `1px solid ${domainColor}30`,
+                      fontWeight: 600
+                    }}>
+                      {agent.domain?.toUpperCase()}
+                    </span>
+                    <span style={{
+                      fontSize: "0.65rem", padding: "0.1rem 0.4rem", borderRadius: "4px",
+                      background: isLlama ? "rgba(168,85,247,0.12)" : "rgba(6,182,212,0.12)",
+                      color: isLlama ? "#c084fc" : "#67e8f9",
+                      border: `1px solid ${isLlama ? "rgba(168,85,247,0.25)" : "rgba(6,182,212,0.25)"}`,
+                      fontWeight: 500
+                    }}>
+                      {modelLabel}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {agent.prompt && (
+                <div style={{
+                  marginTop: "0.5rem", marginLeft: "0.75rem",
+                  fontSize: "0.73rem", color: "#9ca3af",
+                  backgroundColor: "rgba(0,0,0,0.25)", padding: "0.6rem 0.75rem",
+                  borderRadius: "8px", fontFamily: "'JetBrains Mono', monospace",
+                  whiteSpace: "pre-wrap", lineHeight: 1.5,
+                  border: "1px solid rgba(255,255,255,0.04)"
+                }}>
+                  {agent.prompt}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+// ─── Topology Graph (SVG) ──────────────────────────────────────────────
+function AgentTopology({ status, activeSender, activeAgents, lastActiveSenders = [] }) {
+  const isDeployed = status === "RUNNING" || status === "COMPLETED" || status === "HALTED" || status === "CRASHED";
+  const agents = useMemo(() => {
+    if (status !== "IDLE" && activeAgents?.length > 0) return activeAgents;
+    return [
+      { id: "conductor", name: "conductor", role: "Orchestrator", domain: "system", icon: "👑" },
+      { id: "coder", name: "coder", role: "Coder", domain: "system", icon: "💻" }
+    ];
+  }, [status, activeAgents]);
+
+  const getNodeColor = (agent) => {
+    if (agent.id === "conductor") return "#3b82f6";
+    if (agent.id === "coder") return "#22c55e";
+    return getDomainColor(agent.domain);
+  };
+
+  const nodes = useMemo(() => {
+    const reviewers = agents.filter(a => a.id.startsWith("reviewer"));
+    const N = reviewers.length;
+    return agents.map(agent => {
+      if (agent.id === "conductor") return { ...agent, label: "Conductor", sub: "Orchestrator", x: 200, y: 45 };
+      if (agent.id === "coder") return { ...agent, label: "Coder", sub: "Implementation", x: 70, y: 145 };
+      const i = reviewers.findIndex(r => r.id === agent.id);
+      let x, y;
+      if (N === 1) { x = 330; y = 145; }
+      else if (N === 2) { x = 230 + i * 100; y = 145; }
+      else {
+        const angle = (-20 + i * (130 / (N - 1))) * Math.PI / 180;
+        x = Math.round(200 + 130 * Math.cos(angle));
+        y = Math.round(140 + 70 * Math.sin(angle));
+      }
+      const label = agent.role?.includes("SME") ? agent.role.split("SME")[0].trim() : (agent.role || `R${i + 1}`);
+      return { ...agent, label, sub: "JIT Agent", x, y };
+    });
+  }, [agents]);
+
+  const matchesSender = useCallback((senderName, nodeId) => {
+    if (!senderName) return false;
+    const normActive = normalizeName(senderName);
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node) return false;
+    if (node.id === "conductor") return normActive.startsWith("conductor");
+    if (node.id === "coder") return normActive.startsWith("coder");
+    const normNodeName = normalizeName(node.name);
+    return normActive === normNodeName || normActive.includes(normNodeName) || (node.domain && normActive.includes(node.domain.toLowerCase()));
+  }, [nodes]);
+
+  const isNodeActive = useCallback((nodeId) => matchesSender(activeSender, nodeId), [activeSender, matchesSender]);
+
+  const isNodeRecentlyActive = useCallback((nodeId) => {
+    if (isNodeActive(nodeId)) return false; // currently active nodes use the brighter glow
+    return lastActiveSenders.some(s => matchesSender(s.sender, nodeId));
+  }, [lastActiveSenders, isNodeActive, matchesSender]);
+
+  const getRecentGlowOpacity = useCallback((nodeId) => {
+    const match = lastActiveSenders.find(s => matchesSender(s.sender, nodeId));
+    if (!match) return 0;
+    const age = Date.now() - match.ts;
+    return Math.max(0.2, 1 - age / 4000); // fade from 1 to 0.2 over 4s
+  }, [lastActiveSenders, matchesSender]);
+
+  const conductorNode = nodes.find(n => n.id === "conductor");
+
+  return (
+    <div style={{ padding: "0.5rem 0" }}>
+      <svg width="100%" height="230" viewBox="0 0 400 230" style={{ overflow: "visible" }}>
+        <defs>
+          <filter id="glow-active" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+          <filter id="glow-deployed" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+          {/* Animated flow particle */}
+          {isDeployed && nodes.filter(n => n.id !== "conductor").map(n => (
+            <React.Fragment key={`flow-anim-${n.id}`}>
+              <circle id={`dot-${n.id}`} r="3" fill={getNodeColor(n)} opacity="0.9">
+                <animateMotion dur="2s" repeatCount="indefinite" begin={`${nodes.indexOf(n) * 0.4}s`}>
+                  <mpath href={`#path-${n.id}`} />
+                </animateMotion>
+              </circle>
+            </React.Fragment>
+          ))}
+        </defs>
+
+        {/* Connection lines + animated flow paths */}
+        {conductorNode && nodes.filter(n => n.id !== "conductor").map(n => {
+          const active = isNodeActive(n.id) || isNodeActive("conductor");
+          const color = getNodeColor(n);
+          return (
+            <React.Fragment key={`line-${n.id}`}>
+              {/* Invisible path for flow animation */}
+              <path
+                id={`path-${n.id}`}
+                d={`M${conductorNode.x},${conductorNode.y} L${n.x},${n.y}`}
+                fill="none" stroke="none"
+              />
+              {/* Visible line */}
+              <line
+                x1={conductorNode.x} y1={conductorNode.y} x2={n.x} y2={n.y}
+                stroke={active ? color : isDeployed ? `${color}40` : "rgba(255,255,255,0.1)"}
+                strokeWidth={active ? 2.5 : isDeployed ? 1.5 : 1.5}
+                strokeDasharray={isDeployed ? undefined : "4 4"}
+                style={{ transition: "all 0.5s" }}
+              />
+              {/* Flow particle dot */}
+              {isDeployed && (
+                <circle r="3" fill={color} opacity="0.85">
+                  <animateMotion dur={`${1.5 + Math.random()}s`} repeatCount="indefinite" begin={`${nodes.indexOf(n) * 0.3}s`}>
+                    <mpath href={`#path-${n.id}`} />
+                  </animateMotion>
+                </circle>
+              )}
+            </React.Fragment>
+          );
+        })}
+
+        {/* Nodes */}
+        {nodes.map(n => {
+          const active = isNodeActive(n.id);
+          const recentlyActive = isNodeRecentlyActive(n.id);
+          const recentOpacity = getRecentGlowOpacity(n.id);
+          const deployed = isDeployed;
+          const color = getNodeColor(n);
+          return (
+            <g key={n.id}>
+              {/* Active speaking glow (bright, pulsing) */}
+              {active && (
+                <circle cx={n.x} cy={n.y} r="28" fill="none" stroke={color} strokeWidth="2.5"
+                  filter="url(#glow-active)"
+                  style={{ transformOrigin: `${n.x}px ${n.y}px`, animation: "pulse-ring 1.8s cubic-bezier(0.215, 0.610, 0.355, 1) infinite" }}
+                />
+              )}
+              {/* Recently-spoken glow (dimmer, fading) */}
+              {recentlyActive && (
+                <circle cx={n.x} cy={n.y} r="27" fill="none" stroke={color} strokeWidth="1.8"
+                  filter="url(#glow-active)"
+                  opacity={recentOpacity * 0.6}
+                  style={{ transformOrigin: `${n.x}px ${n.y}px`, animation: "pulse-ring 2.5s ease-in-out infinite", transition: "opacity 0.5s" }}
+                />
+              )}
+              {/* Deployed but not speaking glow (subtle ambient) */}
+              {deployed && !active && !recentlyActive && (
+                <circle cx={n.x} cy={n.y} r="26" fill="none" stroke={color} strokeWidth="1.5"
+                  filter="url(#glow-deployed)"
+                  opacity="0.5"
+                  style={{ transformOrigin: `${n.x}px ${n.y}px`, animation: "pulse-ring 3s ease-in-out infinite" }}
+                />
+              )}
+              <circle cx={n.x} cy={n.y} r="22" fill={deployed ? `${color}08` : "#0a0e1a"}
+                stroke={active ? color : recentlyActive ? `${color}B0` : deployed ? `${color}80` : "rgba(255,255,255,0.15)"}
+                strokeWidth={active ? 2.5 : recentlyActive ? 2.2 : deployed ? 2 : 1.5}
+                style={{ transition: "all 0.4s" }}
+              />
+              <text x={n.x} y={n.y + 5} textAnchor="middle" fontSize="1.1rem">{n.icon || getDomainIcon(n.domain)}</text>
+              <text x={n.x} y={n.y + 38} textAnchor="middle" fontSize="0.65rem" fontWeight="bold" fill={active ? "#f3f4f6" : recentlyActive ? "#e5e7eb" : deployed ? "#d1d5db" : "#6b7280"}>
+                {n.label?.length > 14 ? n.label.substring(0, 12) + "…" : n.label}
+              </text>
+              <text x={n.x} y={n.y + 49} textAnchor="middle" fontSize="0.55rem" fill={deployed ? "#9ca3af" : "#4b5563"}>{n.sub}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ─── Debate Message Renderer ───────────────────────────────────────────
+function DebateMessage({ evt, activeAgents }) {
+  const rawMsg = cleanMessageText(evt.message);
+  const headerText = cleanSenderName(evt.sender, evt.role);
+
+  const getSenderColor = (sender) => {
+    if (!sender) return "rgba(255,255,255,0.7)";
+    const norm = sender.replace(/-[a-f0-9]{6,}$/i, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    if (norm.includes("conductor")) return "#3b82f6";
+    if (norm.includes("coder")) return "#22c55e";
+    const agent = activeAgents.find(a => normalizeName(a.name) === norm);
+    if (agent) return getDomainColor(agent.domain);
+    if (sender.includes("reviewer")) return "#a855f7";
+    return "rgba(255,255,255,0.7)";
+  };
+
+  const isAgent = evt.sender !== "SYSTEM" && evt.sender !== "TriageScanner" && evt.sender !== "TelemetryScanner" && evt.sender !== "WatchdogDaemon";
+  const isToolCall = rawMsg.startsWith("🔌");
+  const isTriage = evt.sender === "TriageScanner" || rawMsg.includes("Zero-Trust");
+  const isBandRoom = rawMsg.includes("Band.ai Task Room");
+  const isJira = rawMsg.includes("[JIRA INTEGRATION]");
+  const isWatchdog = evt.sender === "WatchdogDaemon" || evt.sender === "TelemetryScanner" || rawMsg.includes("Anomaly detected");
+
+  const senderColor = getSenderColor(evt.sender);
+
+  // Determine model badge for the sender
+  const norm = normalizeName(evt.sender);
+  const matchedAgent = activeAgents.find(a => normalizeName(a.name) === norm);
+  const isLlama = matchedAgent?.model?.includes("Llama");
+  const modelBadge = matchedAgent?.id?.startsWith("reviewer")
+    ? (isLlama ? "Featherless: Llama-3.1-70B" : `AIML: ${matchedAgent.model || "GPT-4o-mini"}`)
+    : (matchedAgent && (matchedAgent.id === "conductor" || matchedAgent.id === "coder") && evt.role !== "SYSTEM")
+      ? `AIML: ${matchedAgent.model || "GPT-4o-mini"}`
+      : null;
+
+  // Special card styles
+  if (isToolCall) {
+    const cleanToolMsg = rawMsg.replace(/^🔌\s*/, "");
+    const isSuccess = cleanToolMsg.includes("COMPLIANT") || cleanToolMsg.includes("Result: passed");
+    const isFailure = cleanToolMsg.includes("FAILED") || cleanToolMsg.includes("Result: failed");
+    const isCalling = cleanToolMsg.includes("Calling") || cleanToolMsg.includes("dispatch");
+    const statusBadge = isSuccess ? "SUCCESS" : isFailure ? "FAILED" : isCalling ? "DISPATCH" : "RUNNING";
+    const badgeColor = isSuccess ? "#10b981" : isFailure ? "#ef4444" : isCalling ? "#3b82f6" : "#06b6d4";
+
+    return (
+      <div style={{
+        padding: "0.65rem 0.75rem", borderRadius: "10px",
+        background: `${badgeColor}08`, border: `1px solid ${badgeColor}20`,
+        borderLeft: `3px solid ${badgeColor}`,
+        fontFamily: "'JetBrains Mono', monospace"
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.3rem" }}>
+          <span style={{ fontWeight: 700, color: badgeColor, fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            🔌 MCP Tool {isCalling ? "Dispatch" : "Response"}
+          </span>
+          <span style={{ fontSize: "0.6rem", background: `${badgeColor}18`, color: badgeColor, padding: "0.1rem 0.35rem", borderRadius: "4px", fontWeight: 700 }}>
+            {statusBadge}
+          </span>
+        </div>
+        <p style={{ margin: 0, fontSize: "0.78rem", color: isFailure ? "#f87171" : isSuccess ? "#34d399" : "#d1d5db", whiteSpace: "pre-wrap" }}>
+          {cleanToolMsg}
+        </p>
+      </div>
+    );
+  }
+
+  if (isTriage) {
+    const isTriageFail = rawMsg.includes("FAILED") || rawMsg.includes("Zero-Trust Check FAILED");
+    return (
+      <div style={{
+        padding: "0.65rem 0.75rem", borderRadius: "10px",
+        background: isTriageFail ? "rgba(220,38,38,0.06)" : "rgba(16,185,129,0.06)",
+        border: isTriageFail ? "1px solid rgba(220,38,38,0.15)" : "1px solid rgba(16,185,129,0.15)",
+        borderLeft: isTriageFail ? "3px solid #ef4444" : "3px solid #10b981"
+      }}>
+        <div style={{ fontWeight: 700, color: isTriageFail ? "#f87171" : "#34d399", fontSize: "0.72rem", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          🛡️ Zero-Trust Compliance Gate
+        </div>
+        <p style={{ margin: 0, fontSize: "0.8rem", color: "#e5e7eb", whiteSpace: "pre-wrap" }}>{rawMsg}</p>
+      </div>
+    );
+  }
+
+  if (isBandRoom) {
+    return (
+      <div style={{
+        padding: "0.65rem 0.75rem", borderRadius: "10px",
+        background: "rgba(168,85,247,0.06)", border: "1px solid rgba(168,85,247,0.15)",
+        borderLeft: "3px solid #a855f7"
+      }}>
+        <div style={{ fontWeight: 700, color: "#c084fc", fontSize: "0.72rem", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          🔮 Band.ai Orchestration Engine
+        </div>
+        <p style={{ margin: 0, fontSize: "0.8rem", color: "#e9d5ff", whiteSpace: "pre-wrap", fontWeight: 600 }}>{rawMsg}</p>
+      </div>
+    );
+  }
+
+  if (isJira) {
+    return (
+      <div style={{
+        padding: "0.65rem 0.75rem", borderRadius: "10px",
+        background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.15)",
+        borderLeft: "3px solid #2563eb"
+      }}>
+        <div style={{ fontWeight: 700, color: "#60a5fa", fontSize: "0.72rem", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          📘 JIRA Integration
+        </div>
+        <p style={{ margin: 0, fontSize: "0.8rem", color: "#d1d5db", whiteSpace: "pre-wrap", fontStyle: "italic" }}>{rawMsg}</p>
+      </div>
+    );
+  }
+
+  if (isWatchdog) {
+    return (
+      <div style={{
+        padding: "0.65rem 0.75rem", borderRadius: "10px",
+        background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)",
+        borderLeft: "3px solid #f59e0b"
+      }}>
+        <div style={{ fontWeight: 700, color: "#fbbf24", fontSize: "0.72rem", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          🚨 Watchdog Daemon
+        </div>
+        <p style={{ margin: 0, fontSize: "0.8rem", color: "#fef3c7", whiteSpace: "pre-wrap" }}>{rawMsg}</p>
+      </div>
+    );
+  }
+
+  // Standard agent or system message
+  const hasCode = rawMsg.includes("```") || (rawMsg.includes("def ") && rawMsg.includes(":"));
+
+  return (
+    <div style={{
+      padding: "0.65rem 0.75rem", borderRadius: "10px",
+      background: isAgent ? "rgba(255,255,255,0.015)" : "rgba(0,0,0,0.12)",
+      border: isAgent ? "1px solid rgba(255,255,255,0.04)" : "1px dashed rgba(255,255,255,0.03)",
+      borderLeft: isAgent ? `3px solid ${senderColor}` : "none"
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.2rem" }}>
+        <span style={{ fontWeight: 700, color: senderColor, fontSize: "0.82rem" }}>{headerText}</span>
+        <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
+          {modelBadge && (
+            <span style={{
+              fontSize: "0.6rem", padding: "0.08rem 0.35rem", borderRadius: "4px",
+              background: isLlama ? "rgba(168,85,247,0.12)" : "rgba(6,182,212,0.12)",
+              color: isLlama ? "#a855f7" : "#06b6d4"
+            }}>{modelBadge}</span>
+          )}
+          {matchedAgent?.domain && matchedAgent.id?.startsWith("reviewer") && (
+            <span style={{
+              fontSize: "0.6rem", padding: "0.08rem 0.35rem", borderRadius: "4px",
+              background: `${getDomainColor(matchedAgent.domain)}10`,
+              color: getDomainColor(matchedAgent.domain),
+              border: `1px solid ${getDomainColor(matchedAgent.domain)}20`
+            }}>
+              {matchedAgent.domain?.toUpperCase()}
+            </span>
+          )}
+        </div>
+      </div>
+      {hasCode ? <HighlightedCode code={rawMsg} /> : (
+        <p style={{ margin: 0, fontSize: "0.82rem", color: "#d1d5db", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{rawMsg}</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Main App ──────────────────────────────────────────────────────────
 function App() {
+  // ── State ──
   const [status, setStatus] = useState("IDLE");
   const [prId, setPrId] = useState("PR-104");
   const [diffFiles, setDiffFiles] = useState([]);
@@ -97,145 +667,105 @@ function App() {
   const [currentCode, setCurrentCode] = useState(null);
   const [schemaCheck, setSchemaCheck] = useState(null);
   const [openapiCheck, setOpenapiCheck] = useState(null);
-  const [mcpTargetsFromServer, setMcpTargetsFromServer] = useState(null);
   const [rbacCheck, setRbacCheck] = useState(null);
+  const [mcpTargetsFromServer, setMcpTargetsFromServer] = useState(null);
   const [initialSchemaCheck, setInitialSchemaCheck] = useState(null);
   const [initialOpenapiCheck, setInitialOpenapiCheck] = useState(null);
   const [initialRbacCheck, setInitialRbacCheck] = useState(null);
   const [resolutionType, setResolutionType] = useState(null);
-  
+  const [prDiff, setPrDiff] = useState(null);
+  const [prTitle, setPrTitle] = useState("");
+  const [prBranch, setPrBranch] = useState("");
+  const [reviewerAuthRole, setReviewerAuthRole] = useState("Auth & Fraud SME");
+  const [reviewerAuthDomain, setReviewerAuthDomain] = useState("auth");
+  const [reviewerCartRole, setReviewerCartRole] = useState("Cart SME");
+  const [reviewerCartDomain, setReviewerCartDomain] = useState("cart");
+  const [activeAgents, setActiveAgents] = useState([]);
   const [events, setEvents] = useState([]);
   const [watchdogLogs, setWatchdogLogs] = useState([]);
-  const [activeTab, setActiveTab] = useState("debate"); // "debate" or "code"
   const [isStarting, setIsStarting] = useState(false);
   const [backendOnline, setBackendOnline] = useState(true);
   const [debateSummary, setDebateSummary] = useState(null);
-  const [selectedScenario, setSelectedScenario] = useState("rbac_bypass");
-  const [scenarioFromServer, setScenarioFromServer] = useState("rbac_bypass");
+  const [scenarioFromServer, setScenarioFromServer] = useState("dynamic");
 
-  const cleanSenderName = (sender, role) => {
-    if (!sender) return sender;
-    // For agent messages, prefer the role as the display name
-    if (role && role !== "SYSTEM") return role;
-    // Strip hash suffixes like '-7c6144ef' from agent names
-    let clean = sender.replace(/-[a-f0-9]{6,}$/i, '');
-    // Clean reviewer internal names: "reviewer-auth_and_fraud_sme" -> readable form
-    if (clean.startsWith('reviewer-')) {
-      clean = clean.replace('reviewer-', '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()).replace(' And ', ' & ');
-    }
-    return clean;
-  };
+  const [selectedRepo, setSelectedRepo] = useState("vjb/WellActually.ai");
+  const [prsList, setPrsList] = useState([]);
+  const [selectedPrNumber, setSelectedPrNumber] = useState("");
+  const [selectedPrDetails, setSelectedPrDetails] = useState(null);
+  const [isFetchingPrs, setIsFetchingPrs] = useState(false);
+  const [isFetchingPrDetails, setIsFetchingPrDetails] = useState(false);
+  const [githubErrorMsg, setGithubErrorMsg] = useState("");
 
-  // Strip identity leaks from LLM responses (e.g. "[reviewer-cart_sme-ab8ff0d4 (Cart SME)]: ")
-  const cleanMessageText = (text) => {
-    if (!text) return text;
-    return text.replace(/^\[.*?\]:\s*/i, '');
-  };
-
-  // MCP targets: prefer server data, fallback to scenario-based defaults
-  const mcpTargets = mcpTargetsFromServer 
-    ? { table: mcpTargetsFromServer.schema_table, endpoint: mcpTargetsFromServer.api_endpoint }
-    : scenarioFromServer === "rbac_bypass" 
-      ? { table: "billing_profiles", endpoint: "/api/v1/billing/spending" }
-      : { table: "cart_items", endpoint: "/api/v1/checkout" };
-
-  // MCP display: show latest check results to tell the self-healing story
-  const displaySchemaCheck = schemaCheck || initialSchemaCheck;
-  const displayOpenapiCheck = openapiCheck || initialOpenapiCheck;
-  const displayRbacCheck = rbacCheck || initialRbacCheck;
-
-  
+  const [activeTab, setActiveTab] = useState("debate");
   const chatContainerRef = useRef(null);
-  const leftColumnRef = useRef(null);
   const [showBackToTop, setShowBackToTop] = useState(false);
 
-  // Poll server state
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const resStatus = await fetch(`${API_BASE}/api/status`);
-        if (resStatus.ok) {
-          setBackendOnline(true);
-          const data = await resStatus.json();
-          setStatus(data.status);
-          setPrId(data.pr_id);
-          setDiffFiles(data.diff_files || []);
-          setTriageResult(data.triage_result);
-          setConsensusRound(data.consensus_round);
-          setRoomId(data.room_id);
-          setCurrentCode(data.current_code);
-          setSchemaCheck(data.schema_check);
-          setOpenapiCheck(data.openapi_check);
-          setRbacCheck(data.rbac_check);
-          setDebateSummary(data.debate_summary);
-          setScenarioFromServer(data.scenario);
-          setMcpTargetsFromServer(data.mcp_targets);
-          setInitialSchemaCheck(data.initial_schema_check);
-          setInitialOpenapiCheck(data.initial_openapi_check);
-          setInitialRbacCheck(data.initial_rbac_check);
-          setResolutionType(data.resolution_type);
-        }
+  // ── Derived state ──
+  const reviewerAgents = activeAgents.filter(a => a.id?.startsWith("reviewer"));
+  const hasAgents = reviewerAgents.length > 0;
+  const activePhase = getActivePhase(status, hasAgents, !!selectedPrDetails);
+  const isAnalyzing = (status === "TRIAGE" || (status === "RUNNING" && !hasAgents));
 
-        const resEvents = await fetch(`${API_BASE}/api/events`);
-        if (resEvents.ok) {
-          const data = await resEvents.json();
-          setEvents(data);
+  // ── API Calls ──
+  const fetchPRs = async (repoName) => {
+    setIsFetchingPrs(true);
+    setGithubErrorMsg("");
+    try {
+      const res = await fetch(`${API_BASE}/api/github/prs?repo=${encodeURIComponent(repoName)}`);
+      if (res.ok) {
+        const isFallback = res.headers.get("X-GitHub-Fallback") === "true";
+        if (isFallback) setGithubErrorMsg(`Offline mode: Loaded mock data for "${repoName}".`);
+        const data = await res.json();
+        setPrsList(data || []);
+        if (data?.length > 0) {
+          setSelectedPrNumber(data[0].number.toString());
+          fetchPRDetails(repoName, data[0].number);
+        } else {
+          setSelectedPrNumber("");
+          setSelectedPrDetails(null);
         }
-      } catch (err) {
-        setBackendOnline(false);
+      } else {
+        setGithubErrorMsg(`Failed to fetch PRs for "${repoName}".`);
       }
-    }, POLL_INTERVAL_MS);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Fetch telemetry anomalies on mount
-  useEffect(() => {
-    const fetchTelemetry = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/telemetry`);
-        if (res.ok) {
-          const data = await res.json();
-          setWatchdogLogs(data);
-        }
-      } catch (err) {
-        console.error("Failed to fetch telemetry:", err);
-      }
-    };
-    fetchTelemetry();
-  }, [status]);
-
-  // Scroll to bottom of debate chat only when a new message arrives
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    } catch (err) {
+      setGithubErrorMsg("Network error: Backend server unreachable.");
+    } finally {
+      setIsFetchingPrs(false);
     }
-  }, [events.length]);
+  };
 
-  // Show back-to-top button when page is scrolled down
+  const fetchPRDetails = async (repoName, prNum) => {
+    setIsFetchingPrDetails(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/github/pr-details?repo=${encodeURIComponent(repoName)}&number=${prNum}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedPrDetails(data);
+      }
+    } catch (err) {
+      console.error("Error fetching PR details:", err);
+    } finally {
+      setIsFetchingPrDetails(false);
+    }
+  };
+
   useEffect(() => {
-    const handleScroll = () => setShowBackToTop(window.scrollY > 300);
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
+    if (prsList.length === 0) fetchPRs(selectedRepo);
   }, []);
-
-  // Clear isStarting when status changes away from IDLE
-  useEffect(() => {
-    if (status !== 'IDLE') setIsStarting(false);
-  }, [status]);
 
   const handleStart = async () => {
     setIsStarting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/start`, {
+      const payload = {
+        scenario: "dynamic",
+        repo: selectedRepo,
+        pr_number: selectedPrNumber ? parseInt(selectedPrNumber, 10) : null
+      };
+      await fetch(`${API_BASE}/api/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scenario: selectedScenario })
+        body: JSON.stringify(payload)
       });
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error("Failed to start:", errText);
-      }
     } catch (err) {
       console.error("Error starting simulation:", err);
     }
@@ -261,572 +791,624 @@ function App() {
     }
   };
 
+  // ── Polling ──
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const resStatus = await fetch(`${API_BASE}/api/status`);
+        if (resStatus.ok) {
+          setBackendOnline(true);
+          const d = await resStatus.json();
+          setStatus(d.status);
+          setPrId(d.pr_id);
+          setDiffFiles(d.diff_files || []);
+          setTriageResult(d.triage_result);
+          setConsensusRound(d.consensus_round);
+          setRoomId(d.room_id);
+          setCurrentCode(d.current_code);
+          setSchemaCheck(d.schema_check);
+          setOpenapiCheck(d.openapi_check);
+          setRbacCheck(d.rbac_check);
+          setDebateSummary(d.debate_summary);
+          setScenarioFromServer(d.scenario);
+          setMcpTargetsFromServer(d.mcp_targets);
+          setInitialSchemaCheck(d.initial_schema_check);
+          setInitialOpenapiCheck(d.initial_openapi_check);
+          setInitialRbacCheck(d.initial_rbac_check);
+          setResolutionType(d.resolution_type);
+          setPrDiff(d.pr_diff);
+          setPrTitle(d.pr_title || "");
+          setPrBranch(d.pr_branch || "");
+          setReviewerAuthRole(d.reviewer_auth_role || "Auth & Fraud SME");
+          setReviewerAuthDomain(d.reviewer_auth_domain || "auth");
+          setReviewerCartRole(d.reviewer_cart_role || "Cart SME");
+          setReviewerCartDomain(d.reviewer_cart_domain || "cart");
+          setActiveAgents(d.active_agents || []);
+        }
+        const resEvents = await fetch(`${API_BASE}/api/events`);
+        if (resEvents.ok) setEvents(await resEvents.json());
+      } catch {
+        setBackendOnline(false);
+      }
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => { if (status !== 'IDLE') setIsStarting(false); }, [status]);
+  useEffect(() => { if (chatContainerRef.current) chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight; }, [events.length]);
+  useEffect(() => {
+    const h = () => setShowBackToTop(window.scrollY > 300);
+    window.addEventListener("scroll", h, { passive: true });
+    return () => window.removeEventListener("scroll", h);
+  }, []);
+
+  // Fetch telemetry on status change
+  useEffect(() => {
+    const fetchTelemetry = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/telemetry`);
+        if (res.ok) setWatchdogLogs(await res.json());
+      } catch {}
+    };
+    fetchTelemetry();
+  }, [status]);
+
   const canReset = !["IDLE", "RUNNING", "TRIAGE", "PENDING_HUMAN_APPROVAL"].includes(status);
   const canStart = ["IDLE", "COMPLETED", "HALTED", "CRASHED"].includes(status) && !isStarting;
 
+  const lastEvent = events[events.length - 1];
+  const activeSender = lastEvent ? lastEvent.sender.toLowerCase() : "";
+
+  // ── Task 3: Glow persistence — track last 3 speakers with fade-out ──
+  const [lastActiveSenders, setLastActiveSenders] = useState([]);
+  const lastActiveSendersRef = useRef([]);
+
+  useEffect(() => {
+    if (!activeSender) return;
+    const now = Date.now();
+    setLastActiveSenders(prev => {
+      // Remove the current sender if already in the list, then prepend
+      const filtered = prev.filter(s => s.sender !== activeSender);
+      const updated = [{ sender: activeSender, ts: now }, ...filtered].slice(0, 3);
+      lastActiveSendersRef.current = updated;
+      return updated;
+    });
+    // Set up a cleanup timer to remove stale entries after 4s
+    const timer = setTimeout(() => {
+      setLastActiveSenders(prev => prev.filter(s => Date.now() - s.ts < 4000));
+    }, 4100);
+    return () => clearTimeout(timer);
+  }, [activeSender]);
+
+  // Refresh opacity values periodically during active debate
+  useEffect(() => {
+    if (status !== "RUNNING" || lastActiveSendersRef.current.length === 0) return;
+    const interval = setInterval(() => {
+      setLastActiveSenders(prev => {
+        const filtered = prev.filter(s => Date.now() - s.ts < 4000);
+        if (filtered.length !== prev.length) return filtered;
+        return [...prev]; // force re-render for opacity recalc
+      });
+    }, 500);
+    return () => clearInterval(interval);
+  }, [status]);
+
+  // ── MCP Display Helpers ──
+  const displaySchemaCheck = schemaCheck || initialSchemaCheck;
+  const displayOpenapiCheck = openapiCheck || initialOpenapiCheck;
+  const displayRbacCheck = rbacCheck || initialRbacCheck;
+
+  const mcpTargets = mcpTargetsFromServer
+    ? { table: mcpTargetsFromServer.schema_table, endpoint: mcpTargetsFromServer.api_endpoint, rbac: mcpTargetsFromServer.rbac_target }
+    : { table: null, endpoint: null, rbac: null };
+
+  const showSchemaCheck = displaySchemaCheck || (mcpTargets.table && mcpTargets.table !== "None" && mcpTargets.table !== "null");
+  const showOpenapiCheck = displayOpenapiCheck || (mcpTargets.endpoint && mcpTargets.endpoint !== "None" && mcpTargets.endpoint !== "null");
+  const showRbacCheck = displayRbacCheck || (mcpTargets.rbac && mcpTargets.rbac !== "None" && mcpTargets.rbac !== "null");
+  const hasAnyMcp = status !== "IDLE" && (showSchemaCheck || showOpenapiCheck || showRbacCheck);
+
+  // PR display fields
+  const displayDiffFiles = (status === "IDLE" && selectedPrDetails) ? selectedPrDetails.diff_files : diffFiles;
+  const displayPrTitle = status === "IDLE" ? (selectedPrDetails?.title || "Pending load") : (prTitle || selectedPrDetails?.title || "");
+  const displayPrNumber = status === "IDLE" ? (selectedPrDetails ? `#${selectedPrDetails.number}` : "—") : prId;
+  const displayBranch = status === "IDLE" ? (selectedPrDetails?.branch || "—") : (prBranch || "—");
+
+  // Status badge styling
   const getStatusColor = (s) => {
     switch (s) {
-      case "IDLE": return "rgba(156, 163, 175, 0.2)";
-      case "TRIAGE": return "rgba(234, 179, 8, 0.2)";
-      case "PENDING_HUMAN_APPROVAL": return "rgba(239, 68, 68, 0.3)";
-      case "RUNNING": return "rgba(34, 197, 94, 0.2)";
-      case "HALTED": return "rgba(239, 68, 68, 0.2)";
-      case "COMPLETED": return "rgba(59, 130, 246, 0.2)";
-      case "CRASHED": return "rgba(220, 38, 38, 0.4)";
-      default: return "rgba(156, 163, 175, 0.2)";
+      case "IDLE": return { bg: "rgba(156,163,175,0.12)", border: "rgba(156,163,175,0.3)", text: "#9ca3af" };
+      case "TRIAGE": return { bg: "rgba(234,179,8,0.12)", border: "rgba(234,179,8,0.4)", text: "#eab308" };
+      case "PENDING_HUMAN_APPROVAL": return { bg: "rgba(239,68,68,0.15)", border: "rgba(239,68,68,0.5)", text: "#ef4444" };
+      case "RUNNING": return { bg: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.4)", text: "#22c55e" };
+      case "HALTED": return { bg: "rgba(239,68,68,0.12)", border: "rgba(239,68,68,0.4)", text: "#ef4444" };
+      case "COMPLETED": return { bg: "rgba(59,130,246,0.12)", border: "rgba(59,130,246,0.4)", text: "#3b82f6" };
+      case "CRASHED": return { bg: "rgba(220,38,38,0.2)", border: "rgba(220,38,38,0.6)", text: "#dc2626" };
+      default: return { bg: "rgba(156,163,175,0.12)", border: "rgba(156,163,175,0.3)", text: "#9ca3af" };
     }
   };
 
-  const getStatusBorder = (s) => {
-    switch (s) {
-      case "IDLE": return "rgba(156, 163, 175, 0.4)";
-      case "TRIAGE": return "rgba(234, 179, 8, 0.6)";
-      case "PENDING_HUMAN_APPROVAL": return "rgba(239, 68, 68, 0.8)";
-      case "RUNNING": return "rgba(34, 197, 94, 0.6)";
-      case "HALTED": return "rgba(239, 68, 68, 0.6)";
-      case "COMPLETED": return "rgba(59, 130, 246, 0.6)";
-      case "CRASHED": return "rgba(220, 38, 38, 0.8)";
-      default: return "rgba(156, 163, 175, 0.4)";
-    }
-  };
+  const statusStyle = getStatusColor(status);
 
-  const getSenderColor = (sender) => {
-    if (!sender) return "rgba(255,255,255,0.7)";
-    if (sender.includes("conductor")) return "#3b82f6"; // Orchestrator blue
-    if (sender.includes("coder")) return "#22c55e"; // Coder green
-    if (sender.includes("reviewer-auth")) return "#a855f7"; // Auth SME purple (Featherless)
-    if (sender.includes("reviewer-cart")) return "#eab308"; // Cart SME yellow (AIML)
-    return "rgba(255,255,255,0.8)";
-  };
-
+  // ── RENDER ──
   return (
-    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", padding: "2rem" }}>
-      {/* Header Panel */}
-      <header className="glass-panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem" }}>
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", padding: "1.5rem 2rem", maxWidth: "1600px", margin: "0 auto" }}>
+
+      {/* ═══ HEADER ═══ */}
+      <header style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        marginBottom: "0.75rem", padding: "0 0.25rem"
+      }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: "1.8rem", fontWeight: "bold", background: "linear-gradient(to right, #06b6d4, #a855f7)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+          <h1 style={{
+            margin: 0, fontSize: "2rem", fontWeight: 900, letterSpacing: "-0.02em",
+            background: "linear-gradient(135deg, #06b6d4 0%, #a855f7 50%, #ec4899 100%)",
+            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent"
+          }}>
             WellActually.ai
           </h1>
-          <p style={{ margin: "0.25rem 0 0 0", color: "#9ca3af", fontSize: "0.9rem" }}>
-            Domain-Driven Adversarial Code Review Swarm Center
+          <p style={{ margin: "0.15rem 0 0 0", color: "#6b7280", fontSize: "0.78rem", fontWeight: 500, letterSpacing: "0.03em" }}>
+            Just-in-Time Swarm Intelligence · Powered by Band.ai
           </p>
         </div>
-        
-        <div style={{ display: "flex", alignItems: "center", gap: "1.5rem" }}>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
           {!backendOnline && (
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <span style={{ width: "10px", height: "10px", borderRadius: "50%", backgroundColor: "#ef4444" }}></span>
-              <span style={{ fontSize: "0.85rem", color: "#ef4444", fontWeight: "bold" }}>Backend Offline</span>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#ef4444" }} />
+              <span style={{ fontSize: "0.78rem", color: "#ef4444", fontWeight: 600 }}>Offline</span>
             </div>
           )}
+
           {status === "RUNNING" && (
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <span className="pulse" style={{ width: "10px", height: "10px", borderRadius: "50%", backgroundColor: "#22c55e" }}></span>
-              <span style={{ fontSize: "0.85rem", color: "#10b981" }}>Live Debate Active</span>
-              {consensusRound > 0 && (
-                <span style={{ fontSize: "0.8rem", color: "#9ca3af", marginLeft: "0.25rem" }}>
-                  — Round {consensusRound} of 2
-                </span>
-              )}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <span className="pulse" style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#22c55e" }} />
+              <span style={{ fontSize: "0.78rem", color: "#22c55e", fontWeight: 500 }}>
+                Live · Round {consensusRound}/2
+              </span>
             </div>
           )}
-          
+
           <div style={{
-            padding: "0.5rem 1rem",
-            borderRadius: "6px",
-            backgroundColor: getStatusColor(status),
-            border: `1px solid ${getStatusBorder(status)}`,
-            fontSize: "0.9rem",
-            fontWeight: "bold",
-            letterSpacing: "0.05em"
+            padding: "0.35rem 0.75rem", borderRadius: "8px",
+            background: statusStyle.bg, border: `1px solid ${statusStyle.border}`,
+            color: statusStyle.text, fontSize: "0.78rem", fontWeight: 700,
+            letterSpacing: "0.06em"
           }}>
             {status}
           </div>
-          
-          <div
-            style={{
-              padding: "0.5rem 0.75rem",
-              borderRadius: "6px",
-              backgroundColor: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.15)",
-              color: "#e5e7eb",
-              fontSize: "0.85rem",
-              fontWeight: "500",
-              letterSpacing: "0.02em",
-            }}
-          >
-            Spending Report RBAC Bypass
-          </div>
-          
-          <button
-            onClick={handleStart}
-            disabled={!canStart}
-            className="glass-panel"
-            style={{
-              padding: "0.5rem 1.5rem",
-              borderRadius: "6px",
-              cursor: canStart ? "pointer" : "not-allowed",
-              fontWeight: "bold",
-              background: canStart ? "linear-gradient(135deg, #0891b2, #7c3aed)" : "rgba(55, 65, 81, 0.5)",
-              border: "none",
-              color: "white",
-              transition: "transform 0.1s, opacity 0.2s",
-              opacity: canStart ? 1 : 0.5
-            }}
 
-          >
-            {isStarting ? "Dispatching..." : "Start Swarm Review"}
+          <button onClick={handleStart} disabled={!canStart} style={{
+            padding: "0.45rem 1.25rem", borderRadius: "10px", cursor: canStart ? "pointer" : "not-allowed",
+            fontWeight: 700, fontSize: "0.82rem",
+            background: canStart ? "linear-gradient(135deg, #0891b2, #7c3aed)" : "rgba(55,65,81,0.5)",
+            border: "none", color: "white", opacity: canStart ? 1 : 0.5,
+            transition: "all 0.2s", boxShadow: canStart ? "0 4px 20px rgba(124, 58, 237, 0.3)" : "none"
+          }}>
+            {isStarting ? "Synthesizing..." : "⚡ Launch JIT Swarm"}
           </button>
-          
-          <button
-            onClick={handleReset}
-            disabled={!canReset}
-            style={{
-              padding: "0.5rem 1rem",
-              borderRadius: "6px",
-              cursor: canReset ? "pointer" : "not-allowed",
-              fontWeight: "bold",
-              background: "none",
-              border: canReset ? "1px solid rgba(239, 68, 68, 0.5)" : "1px solid rgba(255,255,255,0.1)",
-              color: canReset ? "#f87171" : "rgba(255,255,255,0.25)",
-              fontSize: "0.85rem",
-              transition: "all 0.2s"
-            }}
-          >
-            ↺ Reset
-          </button>
+
+          {canReset && (
+            <button onClick={handleReset} style={{
+              padding: "0.4rem 0.8rem", borderRadius: "8px",
+              background: "none", border: "1px solid rgba(239,68,68,0.4)",
+              color: "#f87171", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer"
+            }}>
+              ↺ Reset
+            </button>
+          )}
         </div>
       </header>
 
-      {/* Main Grid */}
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: "2rem", flex: 1, minHeight: 0 }}>
-        {/* Left Column: Triage, MCP and Watchdog Metrics */}
-        <div
-          ref={leftColumnRef}
-          style={{ display: "flex", flexDirection: "column", gap: "2rem", overflowY: "auto", minHeight: 0, position: "relative" }}
-        >
-          
-          {/* PR Information & Triage card */}
-          <section className={`glass-panel ${status === "PENDING_HUMAN_APPROVAL" ? "glow-red" : ""}`}>
-            <h2 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.5rem", color: "#06b6d4" }}>
-              Pull Request compliance details
-            </h2>
-            
-            <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", gap: "0.75rem", fontSize: "0.9rem", color: "#d1d5db" }}>
-              <span style={{ color: "#9ca3af" }}>Target PR:</span>
-              <span style={{ fontWeight: "bold" }}>{prId}</span>
-              
-              <span style={{ color: "#9ca3af" }}>Branch:</span>
-              <code>codeband/branch-{prId?.toLowerCase()}</code>
-              
-              <span style={{ color: "#9ca3af" }}>Modified:</span>
-              <span style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                {diffFiles.map((f, i) => (
-                  <code key={i} style={{ color: "#f472b6" }}>{f}</code>
-                ))}
-              </span>
+      {/* ═══ PIPELINE PROGRESS ═══ */}
+      <PipelineProgress activePhase={activePhase} />
+
+      {/* ═══ MAIN CONTENT GRID ═══ */}
+      <div className="main-grid" style={{
+        display: "grid", gridTemplateColumns: "minmax(380px, 1fr) minmax(480px, 1.4fr)",
+        gap: "1.5rem", flex: 1, minHeight: 0
+      }}>
+        {/* ─── LEFT COLUMN ─── */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", overflowY: "auto", minHeight: 0 }}>
+
+          {/* Phase 1: INGEST — PR Loader */}
+          <section className="glass-panel" style={{ padding: "1.25rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1rem" }}>
+              <span style={{ fontSize: "1.1rem" }}>🎯</span>
+              <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#06b6d4" }}>PR Ingest</h2>
             </div>
 
-            {triageResult && (
-              <div style={{ marginTop: "1rem", padding: "0.75rem", borderRadius: "6px", backgroundColor: "rgba(0,0,0,0.2)", fontSize: "0.85rem" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-                  <span style={{ color: "#9ca3af" }}>Compliance Triage:</span>
-                  <span style={{ fontWeight: "bold", color: triageResult.is_high_stakes ? "#ef4444" : "#10b981" }}>
-                    {triageResult.is_high_stakes ? "High Stakes Match" : "Compliant Path"}
-                  </span>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "0.68rem", color: "#6b7280", marginBottom: "0.2rem", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
+                  Repository
+                </label>
+                <div style={{ display: "flex", gap: "0.4rem" }}>
+                  <input type="text" value={selectedRepo} onChange={(e) => setSelectedRepo(e.target.value)}
+                    placeholder="owner/repo"
+                    style={{
+                      flex: 1, padding: "0.4rem 0.6rem", borderRadius: "8px",
+                      border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.3)",
+                      color: "white", fontSize: "0.82rem", fontFamily: "'JetBrains Mono', monospace"
+                    }}
+                  />
+                  <button onClick={() => fetchPRs(selectedRepo)} disabled={isFetchingPrs}
+                    style={{
+                      padding: "0.4rem 0.8rem", borderRadius: "8px",
+                      background: "rgba(6,182,212,0.15)", border: "1px solid rgba(6,182,212,0.3)",
+                      color: "#67e8f9", fontSize: "0.75rem", cursor: "pointer", fontWeight: 600
+                    }}
+                  >
+                    {isFetchingPrs ? "..." : "Load"}
+                  </button>
                 </div>
-                <div style={{ color: "#9ca3af" }}>Required Approvals:</div>
-                <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
-                  {triageResult.required_approvals.map((appr, idx) => (
-                    <span key={idx} style={{ padding: "0.2rem 0.5rem", borderRadius: "4px", backgroundColor: "rgba(244,114,182,0.15)", border: "1px solid rgba(244,114,182,0.3)", color: "#f472b6", fontSize: "0.8rem" }}>
-                      {appr}
-                    </span>
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: "0.68rem", color: "#6b7280", marginBottom: "0.2rem", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
+                  Pull Request
+                </label>
+                <select value={selectedPrNumber}
+                  onChange={(e) => { const prNum = e.target.value; setSelectedPrNumber(prNum); if (prNum) fetchPRDetails(selectedRepo, parseInt(prNum, 10)); }}
+                  style={{
+                    width: "100%", padding: "0.4rem 0.6rem", borderRadius: "8px",
+                    border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.3)",
+                    color: "white", fontSize: "0.82rem"
+                  }}
+                >
+                  {prsList.length === 0 ? (
+                    <option value="">-- No open PRs --</option>
+                  ) : prsList.map(pr => (
+                    <option key={pr.number} value={String(pr.number)}>#{pr.number} — {pr.title}</option>
                   ))}
-                </div>
-              </div>
-            )}
-
-            {/* Manual Human Consent Action Bar */}
-            {status === "PENDING_HUMAN_APPROVAL" && (
-              <div style={{ marginTop: "1.5rem", padding: "1rem", borderRadius: "8px", border: "1px solid rgba(239, 68, 68, 0.4)", backgroundColor: "rgba(239, 68, 68, 0.05)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "#ef4444", fontWeight: "bold", fontSize: "0.95rem", marginBottom: "0.5rem" }}>
-                  <span className="pulse" style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#ef4444" }}></span>
-                  Attention: Human approval required to bypass Zero-Trust check
-                </div>
-                <p style={{ margin: "0 0 1rem 0", fontSize: "0.85rem", color: "#d1d5db" }}>
-                  Modifications are touching security/billing directories. Bypassing automatic auto-merge pipeline requires manual consent.
-                </p>
-                <div style={{ display: "flex", gap: "1rem" }}>
-                  <button
-                    onClick={() => handleConsent(true)}
-                    style={{ flex: 1, padding: "0.5rem 1rem", borderRadius: "6px", backgroundColor: "#dc2626", border: "none", color: "white", fontWeight: "bold", cursor: "pointer" }}
-                  >
-                    Approve Exception
-                  </button>
-                  <button
-                    onClick={() => handleConsent(false)}
-                    style={{ flex: 1, padding: "0.5rem 1rem", borderRadius: "6px", backgroundColor: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "white", fontWeight: "bold", cursor: "pointer" }}
-                  >
-                    Reject PR
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Deadlock Human Consent Action Bar */}
-            {status === "HALTED" && !resolutionType && (
-              <div style={{ marginTop: "1.5rem", padding: "1rem", borderRadius: "8px", border: "1px solid rgba(239, 68, 68, 0.4)", backgroundColor: "rgba(239, 68, 68, 0.05)" }}>
-                <div style={{ color: "#ef4444", fontWeight: "bold", fontSize: "0.95rem", marginBottom: "0.5rem" }}>
-                  ⚠️ Consensus Deadlock Intervention
-                </div>
-                <p style={{ margin: "0 0 1rem 0", fontSize: "0.85rem", color: "#d1d5db" }}>
-                  Coder agent continues proposing changes that violate schema constraints despite reviewer feedback. Please intervene.
-                </p>
-                <div style={{ display: "flex", gap: "1rem" }}>
-                  <button
-                    onClick={() => handleConsent(true)}
-                    style={{ flex: 1, padding: "0.5rem 1rem", borderRadius: "6px", backgroundColor: "#2563eb", border: "none", color: "white", fontWeight: "bold", cursor: "pointer" }}
-                  >
-                    Override & Approve PR
-                  </button>
-                  <button
-                    onClick={() => handleConsent(false)}
-                    style={{ flex: 1, padding: "0.5rem 1rem", borderRadius: "6px", backgroundColor: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "white", fontWeight: "bold", cursor: "pointer" }}
-                  >
-                    Reject PR
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Static Context Checker Panel */}
-          <section className="glass-panel">
-            <h2 style={{ margin: "0 0 1.25rem 0", fontSize: "1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.5rem", color: "#06b6d4" }}>
-              Static Bounded Context (MCP) checkers
-            </h2>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              {/* Postgres check */}
-              <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
-                <div style={{ fontSize: "1.5rem" }}>
-                  {displaySchemaCheck === null ? "⏳" : displaySchemaCheck.compliant ? "✅" : "❌"}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displaySchemaCheck && !displaySchemaCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
-                    PostgreSQL Bounded Context Check
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
-                    Target: Postgres Table <code>{mcpTargets.table}</code>
-                  </div>
-                  {displaySchemaCheck && !displaySchemaCheck.compliant && (
-                    <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
-                      {displaySchemaCheck.violations.join("\n")}
-                    </div>
-                  )}
-                </div>
+                </select>
               </div>
 
-              {/* OpenAPI check */}
-              <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
-                <div style={{ fontSize: "1.5rem" }}>
-                  {displayOpenapiCheck === null ? "⏳" : displayOpenapiCheck.compliant ? "✅" : "❌"}
+              {githubErrorMsg && (
+                <div style={{
+                  padding: "0.4rem 0.6rem", borderRadius: "6px",
+                  background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)",
+                  color: "#fde047", fontSize: "0.7rem"
+                }}>
+                  ⚠️ {githubErrorMsg}
                 </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displayOpenapiCheck && !displayOpenapiCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
-                    OpenAPI contract check
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
-                    Target: REST Endpoint <code>{mcpTargets.endpoint}</code>
-                  </div>
-                  {displayOpenapiCheck && !displayOpenapiCheck.compliant && (
-                    <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
-                      {displayOpenapiCheck.violations.join("\n")}
-                    </div>
-                  )}
-                </div>
-              </div>
+              )}
 
-              {/* RBAC Policy check */}
-              <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
-                <div style={{ fontSize: "1.5rem" }}>
-                  {displayRbacCheck === null ? "⏳" : displayRbacCheck.compliant ? "✅" : "❌"}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displayRbacCheck && !displayRbacCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
-                    RBAC Access Policy Check
+              {/* PR Summary mini-card */}
+              {selectedPrDetails && (
+                <div style={{
+                  padding: "0.6rem 0.75rem", borderRadius: "8px",
+                  background: "rgba(6,182,212,0.04)", border: "1px solid rgba(6,182,212,0.12)"
+                }}>
+                  <div style={{ fontSize: "0.82rem", fontWeight: 600, color: "#e5e7eb", marginBottom: "0.3rem" }}>
+                    {displayPrNumber} · {displayPrTitle}
                   </div>
-                  <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
-                    Target: {mcpTargetsFromServer?.rbac_target 
-                      ? <><span>Sensitive Financial Column </span><code>{mcpTargetsFromServer.rbac_target}</code></>
-                      : <><span>Access Policy Boundaries — </span><code>{mcpTargets.table}</code></>
-                    }
+                  <div style={{ fontSize: "0.7rem", color: "#6b7280", marginBottom: "0.3rem" }}>
+                    Branch: <code style={{ color: "#67e8f9" }}>{displayBranch}</code>
                   </div>
-                  {displayRbacCheck && !displayRbacCheck.compliant && (
-                    <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
-                      {displayRbacCheck.violations.join("\n")}
-                    </div>
-                  )}
+                  <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
+                    {(displayDiffFiles || []).map((f, i) => (
+                      <span key={i} style={{
+                        fontSize: "0.65rem", padding: "0.08rem 0.35rem", borderRadius: "4px",
+                        background: "rgba(244,114,182,0.1)", border: "1px solid rgba(244,114,182,0.15)",
+                        color: "#f472b6", fontFamily: "'JetBrains Mono', monospace"
+                      }}>{f}</span>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </section>
 
-          {/* Telemetry watchdog Alerts */}
-          <section className="glass-panel">
-            <h2 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.5rem", color: "#06b6d4" }}>
-              Context-Aware Telemetry watchdog
-            </h2>
+          {/* Phase 2: JIT SYNTHESIS — The Hero */}
+          <JITSynthesisPanel agents={activeAgents} status={status} isAnalyzing={isAnalyzing} />
 
-            {watchdogLogs.length === 0 ? (
-              <p style={{ margin: 0, fontSize: "0.85rem", color: "#9ca3af", fontStyle: "italic" }}>
-                No active anomalies scanned in telemetry stream.
-              </p>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                {watchdogLogs.map((log, idx) => (
-                  <div key={idx} style={{ padding: "0.75rem", borderRadius: "6px", backgroundColor: "rgba(239, 68, 68, 0.08)", borderLeft: "4px solid #ef4444" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", fontWeight: "bold", color: "#f3f4f6" }}>
-                      <span>🚨 {log.service}</span>
-                      <span style={{ color: "#ef4444" }}>{log.level}</span>
-                    </div>
-                    <p style={{ margin: "0.25rem 0 0 0", fontSize: "0.8rem", color: "#d1d5db" }}>
-                      {log.message}
-                    </p>
-                    <div style={{ fontSize: "0.7rem", color: "#9ca3af", marginTop: "0.25rem", textAlign: "right" }}>
-                      {new Date(log.timestamp).toLocaleTimeString()}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Post-Debate Summary Card (Fix #5) */}
-          {debateSummary && (status === "HALTED" || status === "COMPLETED") && (
-            <section className="glass-panel" style={{ borderLeft: "4px solid #22c55e" }}>
-              <h2 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.5rem", color: "#22c55e" }}>
-                📊 Debate Summary
-              </h2>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
-                <div style={{ backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "8px", padding: "0.75rem", textAlign: "center" }}>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#f59e0b" }}>{debateSummary.total_rounds}</div>
-                  <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>Rounds</div>
-                </div>
-                <div style={{ backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "8px", padding: "0.75rem", textAlign: "center" }}>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: debateSummary.is_deadlocked ? "#ef4444" : "#22c55e" }}>
-                    {debateSummary.is_deadlocked ? "Deadlocked" : "Consensus"}
-                  </div>
-                  <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>Outcome</div>
-                </div>
-                <div style={{ backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "8px", padding: "0.75rem", textAlign: "center" }}>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#ef4444" }}>{debateSummary.rejections}</div>
-                  <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>Rejections</div>
-                </div>
-                <div style={{ backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "8px", padding: "0.75rem", textAlign: "center" }}>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#22c55e" }}>{debateSummary.approvals}</div>
-                  <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>Approvals</div>
-                </div>
-              </div>
-
-              {/* Per-Reviewer Breakdown */}
-              {debateSummary.rejections_by_reviewer && Object.entries(debateSummary.rejections_by_reviewer).map(([name, info]) => (
-                <div key={name} style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  padding: "0.5rem 0.75rem", marginBottom: "0.4rem",
-                  backgroundColor: "rgba(239, 68, 68, 0.05)", borderRadius: "6px",
-                  border: "1px solid rgba(239, 68, 68, 0.15)"
-                }}>
-                  <div>
-                    <span style={{ fontWeight: "bold", fontSize: "0.85rem", color: "#e5e7eb" }}>{info.role}</span>
-                    <span style={{
-                      fontSize: "0.65rem", marginLeft: "0.5rem",
-                      backgroundColor: info.domain === "auth" ? "rgba(168,85,247,0.15)" : "rgba(6,182,212,0.15)",
-                      color: info.domain === "auth" ? "#a855f7" : "#06b6d4",
-                      padding: "0.1rem 0.4rem", borderRadius: "4px"
-                    }}>
-                      {info.domain === "auth" ? "Domain: Auth & Schema" : info.domain === "cart" ? "Domain: API Contract" : `Domain: ${info.domain}`}
-                    </span>
-                  </div>
-                  <span style={{ color: "#ef4444", fontWeight: "bold", fontSize: "0.85rem" }}>
-                    {info.count}× rejected
+          {/* Phase 3: DEPLOY — Topology + Band.ai Room */}
+          {(hasAgents || status === "RUNNING") && (
+            <section className="glass-panel fade-in" style={{ padding: "1.25rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.5rem" }}>
+                <span style={{ fontSize: "1.1rem" }}>🔗</span>
+                <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#3b82f6" }}>Band.ai Swarm Deployment</h2>
+                {roomId && (
+                  <span style={{ fontSize: "0.65rem", color: "#6b7280", fontFamily: "'JetBrains Mono', monospace", marginLeft: "auto" }}>
+                    Room: {roomId.substring(0, 12)}…
                   </span>
-                </div>
-              ))}
-
-              {/* Resolution */}
-              <div style={{
-                marginTop: "0.75rem", padding: "0.5rem 0.75rem", borderRadius: "6px",
-                backgroundColor: status === "COMPLETED" ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
-                border: `1px solid ${status === "COMPLETED" ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`
-              }}>
-                <span style={{ fontSize: "0.8rem", color: status === "COMPLETED" ? "#22c55e" : "#ef4444" }}>
-                  Resolution: {resolutionType === "consensus" 
-                    ? "✓ Approved by Swarm Consensus" 
-                    : resolutionType === "human_override" 
-                      ? "✓ Approved (Human Override)" 
-                      : resolutionType === "halted" 
-                        ? "⚠️ Halted — PR Rejected"
-                        : status === "COMPLETED"
-                          ? (debateSummary?.is_deadlocked ? "✓ Approved (Human Override)" : "✓ Approved by Swarm Consensus")
-                          : "⚠️ Halted — Awaiting HITL"}
-                </span>
+                )}
               </div>
+              <AgentTopology status={status} activeSender={activeSender} activeAgents={activeAgents} lastActiveSenders={lastActiveSenders} />
             </section>
           )}
 
+          {/* Triage & HITL panels — only show during debate phase onwards */}
+          {triageResult && activePhase >= 3 && (
+            <section className={`glass-panel fade-in ${status === "PENDING_HUMAN_APPROVAL" ? "glow-red" : ""}`} style={{ padding: "1.25rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                <span style={{ fontSize: "1rem" }}>🛡️</span>
+                <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: triageResult.is_high_stakes ? "#ef4444" : "#10b981" }}>
+                  Compliance Triage
+                </h2>
+                <span style={{
+                  fontSize: "0.65rem", fontWeight: 700, padding: "0.1rem 0.4rem", borderRadius: "4px",
+                  background: triageResult.is_high_stakes ? "rgba(239,68,68,0.12)" : "rgba(16,185,129,0.12)",
+                  color: triageResult.is_high_stakes ? "#ef4444" : "#10b981",
+                  marginLeft: "auto"
+                }}>
+                  {triageResult.is_high_stakes ? "HIGH STAKES" : "CLEAN"}
+                </span>
+              </div>
+
+              <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", marginBottom: triageResult.is_high_stakes ? "1rem" : 0 }}>
+                {triageResult.required_approvals?.map((appr, idx) => (
+                  <span key={idx} style={{
+                    padding: "0.15rem 0.4rem", borderRadius: "4px",
+                    background: "rgba(244,114,182,0.1)", border: "1px solid rgba(244,114,182,0.2)",
+                    color: "#f472b6", fontSize: "0.72rem"
+                  }}>{appr}</span>
+                ))}
+              </div>
+
+              {/* HITL Action Bars */}
+              {status === "PENDING_HUMAN_APPROVAL" && (
+                <div style={{ padding: "0.75rem", borderRadius: "10px", border: "1px solid rgba(239,68,68,0.3)", background: "rgba(239,68,68,0.04)" }}>
+                  <p style={{ margin: "0 0 0.75rem 0", fontSize: "0.82rem", color: "#f87171", fontWeight: 600 }}>
+                    ⚠️ Human approval required to proceed
+                  </p>
+                  <div style={{ display: "flex", gap: "0.75rem" }}>
+                    <button onClick={() => handleConsent(true)} style={{
+                      flex: 1, padding: "0.45rem", borderRadius: "8px",
+                      background: "#dc2626", border: "none", color: "white", fontWeight: 700, cursor: "pointer", fontSize: "0.8rem"
+                    }}>Approve Exception</button>
+                    <button onClick={() => handleConsent(false)} style={{
+                      flex: 1, padding: "0.45rem", borderRadius: "8px",
+                      background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "white", fontWeight: 600, cursor: "pointer", fontSize: "0.8rem"
+                    }}>Reject PR</button>
+                  </div>
+                </div>
+              )}
+
+              {status === "HALTED" && !resolutionType && (
+                <div style={{ padding: "0.75rem", borderRadius: "10px", border: "1px solid rgba(239,68,68,0.3)", background: "rgba(239,68,68,0.04)" }}>
+                  <p style={{ margin: "0 0 0.75rem 0", fontSize: "0.82rem", color: "#f87171", fontWeight: 600 }}>
+                    ⚠️ Consensus Deadlock — Human intervention required
+                  </p>
+                  <div style={{ display: "flex", gap: "0.75rem" }}>
+                    <button onClick={() => handleConsent(true)} style={{
+                      flex: 1, padding: "0.45rem", borderRadius: "8px",
+                      background: "#2563eb", border: "none", color: "white", fontWeight: 700, cursor: "pointer", fontSize: "0.8rem"
+                    }}>Override & Approve</button>
+                    <button onClick={() => handleConsent(false)} style={{
+                      flex: 1, padding: "0.45rem", borderRadius: "8px",
+                      background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "white", fontWeight: 600, cursor: "pointer", fontSize: "0.8rem"
+                    }}>Reject PR</button>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+
+
+          {/* Phase 5: Verdict Summary — Rich Scorecard */}
+          {debateSummary && (status === "HALTED" || status === "COMPLETED" || status === "CRASHED") && (() => {
+            const jitAgentCount = activeAgents.filter(a => a.id?.startsWith("reviewer")).length;
+            const uniqueDomains = [...new Set(activeAgents.filter(a => a.id?.startsWith("reviewer") && a.domain).map(a => a.domain))];
+            const totalFilesAnalyzed = (diffFiles?.length || displayDiffFiles?.length || 0);
+
+            const verdictColor = status === "COMPLETED" ? "#22c55e" : "#ef4444";
+
+            return (
+            <section className="glass-panel fade-in" style={{ padding: "1.5rem", borderLeft: `3px solid ${verdictColor}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1.25rem" }}>
+                <span style={{ fontSize: "1.2rem" }}>📊</span>
+                <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 800, color: verdictColor }}>
+                  Verdict Scorecard
+                </h2>
+                <span style={{
+                  fontSize: "0.6rem", fontWeight: 700, padding: "0.15rem 0.5rem", borderRadius: "6px",
+                  background: `${verdictColor}15`, border: `1px solid ${verdictColor}30`, color: verdictColor,
+                  textTransform: "uppercase", letterSpacing: "0.08em", marginLeft: "auto"
+                }}>
+                  {status === "COMPLETED" ? "✓ PASSED" : status === "CRASHED" ? "💥 CRASHED" : "⚠ HALTED"}
+                </span>
+              </div>
+
+              {/* Stats Grid — 3x2 */}
+              <div className="verdict-stats-grid" style={{
+                display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.6rem", marginBottom: "1.25rem"
+              }}>
+                {[
+                  { icon: "🔄", label: "Rounds", value: debateSummary.total_rounds, color: "#f59e0b" },
+                  { icon: "🤖", label: "JIT Agents", value: jitAgentCount, color: "#a855f7" },
+                  { icon: "📁", label: "Files Analyzed", value: totalFilesAnalyzed, color: "#06b6d4" },
+                  { icon: "✅", label: "Approvals", value: debateSummary.approvals, color: "#22c55e" },
+                  { icon: "❌", label: "Rejections", value: debateSummary.rejections, color: "#ef4444" },
+                  { icon: "⚡", label: "Swarm Model", value: "Multi-LLM", color: "#f97316" },
+                ].map(({ icon, label, value, color }) => (
+                  <div key={label} className="verdict-stat-card" style={{
+                    background: `${color}08`, borderRadius: "12px",
+                    padding: "0.75rem 0.6rem", textAlign: "center",
+                    border: `1px solid ${color}18`,
+                    transition: "all 0.3s"
+                  }}>
+                    <div style={{ fontSize: "1rem", marginBottom: "0.2rem" }}>{icon}</div>
+                    <div style={{ fontSize: "1.4rem", fontWeight: 800, color, lineHeight: 1.1 }}>{value}</div>
+                    <div style={{ fontSize: "0.62rem", color: "#6b7280", fontWeight: 600, marginTop: "0.2rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Outcome + Domains */}
+              <div style={{ display: "flex", gap: "0.6rem", marginBottom: "1rem" }}>
+                <div style={{
+                  flex: 1, padding: "0.65rem 0.75rem", borderRadius: "10px",
+                  background: debateSummary.is_deadlocked ? "rgba(239,68,68,0.06)" : "rgba(34,197,94,0.06)",
+                  border: `1px solid ${debateSummary.is_deadlocked ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)"}`
+                }}>
+                  <div style={{ fontSize: "0.62rem", color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.25rem" }}>Outcome</div>
+                  <div style={{ fontSize: "0.88rem", fontWeight: 700, color: debateSummary.is_deadlocked ? "#ef4444" : "#22c55e" }}>
+                    {debateSummary.is_deadlocked ? "⚠️ Deadlock" : "✓ Consensus"}
+                  </div>
+                </div>
+                <div style={{
+                  flex: 1.5, padding: "0.65rem 0.75rem", borderRadius: "10px",
+                  background: "rgba(168,85,247,0.04)", border: "1px solid rgba(168,85,247,0.12)"
+                }}>
+                  <div style={{ fontSize: "0.62rem", color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.3rem" }}>Domains Covered</div>
+                  <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
+                    {uniqueDomains.length > 0 ? uniqueDomains.map(d => (
+                      <span key={d} style={{
+                        fontSize: "0.65rem", padding: "0.1rem 0.4rem", borderRadius: "4px",
+                        background: `${getDomainColor(d)}15`, color: getDomainColor(d),
+                        border: `1px solid ${getDomainColor(d)}25`, fontWeight: 600
+                      }}>{getDomainIcon(d)} {d}</span>
+                    )) : <span style={{ fontSize: "0.7rem", color: "#4b5563", fontStyle: "italic" }}>—</span>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Per-reviewer breakdown */}
+              {debateSummary.rejections_by_reviewer && Object.keys(debateSummary.rejections_by_reviewer).length > 0 && (
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <div style={{ fontSize: "0.65rem", color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.4rem" }}>Rejection Breakdown</div>
+                  {Object.entries(debateSummary.rejections_by_reviewer).map(([name, info]) => (
+                    <div key={name} style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      padding: "0.4rem 0.6rem", marginBottom: "0.3rem", borderRadius: "8px",
+                      background: "rgba(239,68,68,0.04)", border: "1px solid rgba(239,68,68,0.1)"
+                    }}>
+                      <div>
+                        <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "#e5e7eb" }}>{info.role}</span>
+                        <span style={{
+                          fontSize: "0.6rem", marginLeft: "0.4rem",
+                          background: `${getDomainColor(info.domain)}12`, color: getDomainColor(info.domain),
+                          padding: "0.05rem 0.3rem", borderRadius: "3px"
+                        }}>{info.domain}</span>
+                      </div>
+                      <span style={{ color: "#ef4444", fontWeight: 700, fontSize: "0.8rem" }}>{info.count}× rejected</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Final resolution banner */}
+              <div style={{
+                padding: "0.5rem 0.75rem", borderRadius: "10px",
+                background: status === "COMPLETED" ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)",
+                border: `1px solid ${status === "COMPLETED" ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)"}`
+              }}>
+                <span style={{ fontSize: "0.82rem", color: status === "COMPLETED" ? "#22c55e" : "#ef4444", fontWeight: 700 }}>
+                  {resolutionType === "consensus" ? "✓ Approved by Swarm Consensus"
+                    : resolutionType === "human_override" ? "✓ Approved (Human Override)"
+                    : resolutionType === "halted" ? "⚠️ Halted — PR Rejected"
+                    : status === "COMPLETED" ? (debateSummary?.is_deadlocked ? "✓ Approved (Human Override)" : "✓ Approved by Swarm Consensus")
+                    : status === "CRASHED" ? "💥 Pipeline Crashed"
+                    : "⚠️ Halted — Awaiting HITL"}
+                </span>
+              </div>
+            </section>
+            );
+          })()}
         </div>
 
-        {/* Right Column: Live feed panel */}
-        <section className="glass-panel" style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.75rem", marginBottom: "1rem" }}>
-            <div role="tablist" style={{ display: "flex", gap: "1rem" }}>
-              <button
-                onClick={() => setActiveTab("debate")}
-                role="tab"
-                aria-selected={activeTab === "debate"}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: activeTab === "debate" ? "#06b6d4" : "#9ca3af",
-                  fontWeight: "bold",
-                  cursor: "pointer",
-                  fontSize: "1rem",
-                  borderBottom: activeTab === "debate" ? "2px solid #06b6d4" : "2px solid transparent",
-                  paddingBottom: "0.5rem"
-                }}
-              >
-                Swarm Debate Room Feed
-              </button>
-              <button
-                onClick={() => setActiveTab("code")}
-                role="tab"
-                aria-selected={activeTab === "code"}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: activeTab === "code" ? "#06b6d4" : "#9ca3af",
-                  fontWeight: "bold",
-                  cursor: "pointer",
-                  fontSize: "1rem",
-                  borderBottom: activeTab === "code" ? "2px solid #06b6d4" : "2px solid transparent",
-                  paddingBottom: "0.5rem"
-                }}
-              >
-                Proposed Implementation
-              </button>
+        {/* ─── RIGHT COLUMN: Live Feed ─── */}
+        <section className="glass-panel" style={{
+          display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden", padding: "1.25rem"
+        }}>
+          {/* Tabs */}
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "0.6rem", marginBottom: "0.75rem"
+          }}>
+            <div style={{ display: "flex", gap: "1rem" }}>
+              {[
+                { key: "debate", label: "⚔️ Live Debate Feed" },
+                { key: "code", label: "💻 Proposed Code" }
+              ].map(tab => (
+                <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+                  style={{
+                    background: "none", border: "none", cursor: "pointer",
+                    color: activeTab === tab.key ? "#06b6d4" : "#6b7280",
+                    fontWeight: 700, fontSize: "0.88rem",
+                    borderBottom: activeTab === tab.key ? "2px solid #06b6d4" : "2px solid transparent",
+                    paddingBottom: "0.4rem", transition: "all 0.2s"
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
-            
             {roomId && (
-              <span style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
-                Room ID: <code>{roomId.substring(0, 8)}...</code>
+              <span style={{ fontSize: "0.68rem", color: "#4b5563", fontFamily: "'JetBrains Mono', monospace" }}>
+                {roomId.substring(0, 10)}…
               </span>
             )}
           </div>
 
           {activeTab === "debate" ? (
-            <div ref={chatContainerRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", paddingRight: "0.5rem" }}>
+            <div ref={chatContainerRef} style={{
+              flex: 1, overflowY: "auto", display: "flex", flexDirection: "column",
+              gap: "0.6rem", paddingRight: "0.25rem"
+            }}>
               {events.length === 0 ? (
-                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontStyle: "italic", fontSize: "0.95rem" }}>
-                  Swarm Room inactive. Press Start to initiate.
+                <div style={{
+                  flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+                  justifyContent: "center", gap: "1rem", color: "#4b5563"
+                }}>
+                  <div style={{ fontSize: "2.5rem", opacity: 0.5 }}>⚔️</div>
+                  <div style={{ fontSize: "0.9rem", fontStyle: "italic" }}>
+                    Debate room idle. Launch a JIT swarm to begin.
+                  </div>
                 </div>
               ) : (
-                events.map((evt, idx) => {
-                  const isAgent = evt.sender !== "SYSTEM" && evt.sender !== "TriageScanner" && evt.sender !== "TelemetryScanner" && evt.sender !== "WatchdogDaemon";
-                  return (
-                    <div
-                      key={idx}
-                      style={{
-                        padding: "0.75rem",
-                        borderRadius: "8px",
-                        backgroundColor: isAgent ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.15)",
-                        border: isAgent ? `1px solid rgba(255,255,255,0.05)` : "1px dashed rgba(255,255,255,0.02)",
-                        borderLeft: isAgent ? `4px solid ${getSenderColor(evt.sender)}` : "none"
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
-                        <span style={{ fontWeight: "bold", color: getSenderColor(evt.sender), fontSize: "0.85rem" }}>
-                          {cleanSenderName(evt.sender, evt.role)} {evt.role !== "SYSTEM" && evt.role !== cleanSenderName(evt.sender, evt.role) && `(${evt.role})`}
-                        </span>
-                        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                          {evt.sender.includes("reviewer-auth") && (
-                            <>
-                              <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(168,85,247,0.15)", color: "#a855f7", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
-                                Featherless: Llama-3.1-70B
-                              </span>
-                              <span style={{ fontSize: "0.65rem", backgroundColor: "rgba(168,85,247,0.08)", color: "#c084fc", padding: "0.1rem 0.4rem", borderRadius: "4px", border: "1px solid rgba(168,85,247,0.2)" }}>
-                                Domain: Auth & Schema
-                              </span>
-                            </>
-                          )}
-                          {evt.sender.includes("reviewer-cart") && (
-                            <>
-                              <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
-                                AIML: GPT-4o-mini
-                              </span>
-                              <span style={{ fontSize: "0.65rem", backgroundColor: "rgba(6,182,212,0.08)", color: "#67e8f9", padding: "0.1rem 0.4rem", borderRadius: "4px", border: "1px solid rgba(6,182,212,0.2)" }}>
-                                Domain: API Contract
-                              </span>
-                            </>
-                          )}
-                          {(evt.sender.includes("coder") || evt.sender.includes("conductor")) && evt.role !== "SYSTEM" && (
-                            <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
-                              AIML: GPT-4o-mini
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      
-                      {(() => {
-                        const msg = cleanMessageText(evt.message);
-                        return (msg.includes("```") || (msg.includes("def ") && msg.includes(":"))) ? (
-                          <HighlightedCode code={msg} />
-                        ) : (
-                          <p style={{ margin: 0, fontSize: "0.85rem", color: "#e5e7eb", whiteSpace: "pre-wrap" }}>
-                            {msg}
-                          </p>
-                        );
-                      })()}
-                    </div>
-                  );
-                })
+                events.map((evt, idx) => (
+                  <DebateMessage key={idx} evt={evt} activeAgents={activeAgents} />
+                ))
               )}
+
               {status === "RUNNING" && (
                 <div style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.6rem",
-                  padding: "0.75rem 1rem",
-                  marginTop: "0.5rem",
-                  borderRadius: "8px",
-                  backgroundColor: "rgba(34, 197, 94, 0.05)",
-                  border: "1px solid rgba(34, 197, 94, 0.15)"
+                  display: "flex", alignItems: "center", gap: "0.5rem",
+                  padding: "0.6rem 0.8rem", borderRadius: "10px",
+                  background: "rgba(34,197,94,0.04)", border: "1px solid rgba(34,197,94,0.1)"
                 }}>
-                  <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: "3px" }}>
                     {[0, 1, 2].map(i => (
                       <span key={i} style={{
-                        width: "6px",
-                        height: "6px",
-                        borderRadius: "50%",
-                        backgroundColor: "#22c55e",
+                        width: "5px", height: "5px", borderRadius: "50%",
+                        background: "#22c55e",
                         animation: `thinkingDot 1.4s ease-in-out ${i * 0.2}s infinite`
                       }} />
                     ))}
                   </div>
-                  <span style={{ fontSize: "0.8rem", color: "#22c55e", fontStyle: "italic" }}>
-                    Auth & Fraud SME + Cart SME reasoning via Band.ai room...
+                  <span style={{ fontSize: "0.75rem", color: "#22c55e", fontStyle: "italic" }}>
+                    JIT Agents reasoning via Band.ai swarm room…
                   </span>
                 </div>
               )}
-
             </div>
           ) : (
-            <div style={{ flex: 1, overflow: "auto", backgroundColor: "#04060a", borderRadius: "8px", padding: "1rem" }}>
+            <div style={{ flex: 1, overflow: "auto", background: "#060810", borderRadius: "10px", padding: "1rem" }}>
               {currentCode ? (
-                <HighlightedCode code={currentCode} />
+                <div>
+                  <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "0.85rem", color: "#22c55e" }}>
+                    🛠️ Swarm Proposed Fix (Round {consensusRound}):
+                  </h3>
+                  <HighlightedCode code={currentCode} />
+                </div>
+              ) : (prDiff || selectedPrDetails?.diff) ? (
+                <div>
+                  <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "0.85rem", color: "#06b6d4" }}>
+                    📄 PR Diff Under Review:
+                  </h3>
+                  <pre style={{
+                    margin: 0, padding: "0.5rem", color: "#d1d5db",
+                    fontFamily: "'JetBrains Mono', monospace", fontSize: "0.78rem",
+                    whiteSpace: "pre-wrap", background: "rgba(0,0,0,0.3)",
+                    borderRadius: "6px", border: "1px solid rgba(255,255,255,0.04)"
+                  }}>{prDiff || selectedPrDetails?.diff}</pre>
+                </div>
               ) : (
-                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontStyle: "italic", fontSize: "0.95rem" }}>
-                  No code proposed in current session.
+                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#4b5563", fontStyle: "italic" }}>
+                  No code proposed yet.
                 </div>
               )}
             </div>
@@ -834,37 +1416,58 @@ function App() {
         </section>
       </div>
 
-      {/* Back to top button — fixed to viewport */}
+      {/* Back to top */}
       {showBackToTop && (
-        <button
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          aria-label="Back to top"
+        <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} aria-label="Back to top"
           style={{
-            position: "fixed",
-            bottom: "2rem",
-            left: "2rem",
-            width: "42px",
-            height: "42px",
-            borderRadius: "50%",
-            border: "1px solid rgba(6, 182, 212, 0.5)",
-            background: "rgba(6, 182, 212, 0.15)",
-            backdropFilter: "blur(12px)",
-            color: "#06b6d4",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: "1.2rem",
-            transition: "all 0.2s",
-            boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-            zIndex: 1000
+            position: "fixed", bottom: "1.5rem", left: "1.5rem",
+            width: "38px", height: "38px", borderRadius: "50%",
+            border: "1px solid rgba(6,182,212,0.4)", background: "rgba(6,182,212,0.12)",
+            backdropFilter: "blur(12px)", color: "#06b6d4", cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "1rem", zIndex: 1000,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.5)"
           }}
-          onMouseEnter={(e) => { e.target.style.background = "rgba(6, 182, 212, 0.3)"; e.target.style.transform = "scale(1.1)"; }}
-          onMouseLeave={(e) => { e.target.style.background = "rgba(6, 182, 212, 0.15)"; e.target.style.transform = "scale(1)"; }}
-        >
-          ↑
-        </button>
+        >↑</button>
       )}
+    </div>
+  );
+}
+
+// ─── MCP Check Row Component ───────────────────────────────────────────
+function McpCheckRow({ title, target, check, status }) {
+  const icon = check === null || check === undefined
+    ? (status === "IDLE" ? "⚪" : "⏳")
+    : check.compliant ? "✅" : "❌";
+
+  return (
+    <div style={{
+      display: "flex", gap: "0.75rem", padding: "0.6rem 0.75rem",
+      borderRadius: "8px", background: "rgba(0,0,0,0.12)",
+      border: "1px solid rgba(255,255,255,0.03)"
+    }}>
+      <div style={{ fontSize: "1.2rem", flexShrink: 0 }}>{icon}</div>
+      <div style={{ flex: 1 }}>
+        <div style={{
+          fontWeight: 600, fontSize: "0.82rem",
+          color: check && !check.compliant ? "#ef4444" : "#e5e7eb"
+        }}>{title}</div>
+        {target && target !== "None" && target !== "null" && (
+          <div style={{ fontSize: "0.7rem", color: "#6b7280", marginTop: "0.15rem" }}>
+            Target: <code style={{ color: "#67e8f9" }}>{target}</code>
+          </div>
+        )}
+        {check && !check.compliant && check.violations && (
+          <div style={{
+            fontSize: "0.7rem", color: "#f87171", marginTop: "0.4rem",
+            fontFamily: "'JetBrains Mono', monospace",
+            background: "rgba(239,68,68,0.06)", padding: "0.4rem",
+            borderRadius: "6px"
+          }}>
+            {check.violations.join("\n")}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

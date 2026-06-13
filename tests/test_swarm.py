@@ -676,3 +676,505 @@ def test_api_mcp_returns_compliance():
     assert "postgres" in data
     assert "openapi" in data
     assert "compliant" in data["postgres"]
+
+
+def test_sqlite_mcp_fallback():
+    """
+    Verifies that the SQLite Fallback Database MCP Server starts up,
+    handshakes successfully, and returns the expected schema columns.
+    """
+    import sys
+    from src.mcp_client import MCPClient
+    
+    server_script = os.path.join("src", "mcp_sqlite_server.py")
+    client = MCPClient(sys.executable, [server_script])
+    try:
+        client.start()
+        res = client.call_tool("query", {
+            "sql": "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public';"
+        })
+        assert "content" in res
+        content = res["content"]
+        assert len(content) > 0
+        assert content[0]["type"] == "text"
+        
+        text_data = content[0]["text"]
+        records = json.loads(text_data)
+        assert len(records) > 0
+        
+        # Verify that we can find expected tables and columns
+        tables = {rec["table_name"].lower() for rec in records}
+        assert "users" in tables
+        assert "billing_profiles" in tables
+        assert "products" in tables
+        assert "carts" in tables
+        assert "cart_items" in tables
+        assert "transaction_audit_logs" in tables
+        
+        # Verify some specific columns
+        columns_by_table = {}
+        for rec in records:
+            t = rec["table_name"].lower()
+            c = rec["column_name"].lower()
+            if t not in columns_by_table:
+                columns_by_table[t] = set()
+            columns_by_table[t].add(c)
+            
+        assert "email" in columns_by_table["users"]
+        assert "spending_limit_usd" in columns_by_table["billing_profiles"]
+        assert "quantity" in columns_by_table["cart_items"]
+        
+    finally:
+        client.close()
+
+
+# ============================================================================
+# Milestone 2 & 3: New Tests
+# ============================================================================
+
+def test_github_pr_loader_with_mock_api():
+    """Verifies that GitHub loader endpoints return the expected data when the GitHub API responds."""
+    class MockResponse:
+        def __init__(self, data: bytes):
+            self.data = data
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+        def read(self):
+            return self.data
+
+    def mock_urlopen(req, *args, **kwargs):
+        url = req.full_url if hasattr(req, "full_url") else req
+        if "/pulls/104/files" in url:
+            return MockResponse(json.dumps([{"filename": "src/cart/checkout.py"}]).encode())
+        elif "/pulls/217/files" in url:
+            return MockResponse(json.dumps([{"filename": "src/billing/spending_report.py"}]).encode())
+        elif "/pulls/104" in url:
+            if req.headers.get("Accept") == "application/vnd.github.v3.diff":
+                return MockResponse(b"diff --git a/src/cart/checkout.py b/src/cart/checkout.py\n+discount_applied")
+            else:
+                return MockResponse(json.dumps({"number": 104, "title": "Refactor checkout flow database queries", "body": "test", "state": "open"}).encode())
+        elif "/pulls/217" in url:
+            if req.headers.get("Accept") == "application/vnd.github.v3.diff":
+                return MockResponse(b"diff --git a/src/billing/spending_report.py b/src/billing/spending_report.py\n+discount_tier")
+            else:
+                return MockResponse(json.dumps({"number": 217, "title": "Implement spending report fetcher endpoint", "body": "test", "state": "open"}).encode())
+        elif "/pulls" in url:
+            return MockResponse(json.dumps([
+                {"number": 217, "title": "Implement spending report fetcher endpoint", "state": "open", "html_url": "https://github.com/test/repo/pull/217"},
+                {"number": 104, "title": "Refactor checkout flow database queries", "state": "open", "html_url": "https://github.com/test/repo/pull/104"}
+            ]).encode())
+        raise Exception(f"Unexpected url in mock urlopen: {url}")
+
+    client = TestClient(app)
+
+    # 1. Test success case with mocked API
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        # Test pulls list
+        res = client.get("/api/github/prs?repo=testowner/testrepo")
+        assert res.status_code == 200
+        prs = res.json()
+        assert len(prs) == 2
+        assert any(pr["number"] == 217 for pr in prs)
+        
+        # Test PR 217 details
+        res_details_217 = client.get("/api/github/pr-details?repo=testowner/testrepo&number=217")
+        assert res_details_217.status_code == 200
+        details_217 = res_details_217.json()
+        assert details_217["number"] == 217
+        assert "spending_report.py" in str(details_217["diff_files"])
+        assert "discount_tier" in details_217["diff"]
+
+        # Test PR 104 details
+        res_details_104 = client.get("/api/github/pr-details?repo=testowner/testrepo&number=104")
+        assert res_details_104.status_code == 200
+        details_104 = res_details_104.json()
+        assert details_104["number"] == 104
+        assert "checkout.py" in str(details_104["diff_files"])
+        assert "discount_applied" in details_104["diff"]
+
+    # 2. Test failure case (unmocked or raising exception) - should raise 502 instead of returning fallbacks
+    with patch("urllib.request.urlopen", side_effect=Exception("API connection failure")):
+        res_fail_prs = client.get("/api/github/prs?repo=testowner/testrepo")
+        assert res_fail_prs.status_code == 502
+        assert "GitHub API Error" in res_fail_prs.json()["detail"]
+
+        res_fail_details = client.get("/api/github/pr-details?repo=testowner/testrepo&number=217")
+        assert res_fail_details.status_code == 502
+        assert "GitHub API Error" in res_fail_details.json()["detail"]
+
+
+def test_webhook_listener_trigger():
+    """Verifies that POST /api/webhooks/github accepts a mock payload and returns a success status."""
+    client = TestClient(app)
+    # We must patch run_simulation_task to avoid running the full async background loop
+    with patch("src.server.run_simulation_task", new_callable=AsyncMock):
+        payload = {
+            "action": "opened",
+            "pull_request": {
+                "number": 217,
+                "title": "Implement spending report fetcher endpoint",
+                "state": "open",
+                "base": {
+                    "repo": {
+                        "full_name": "testowner/testrepo"
+                    }
+                }
+            }
+        }
+        res = client.post("/api/webhooks/github", json=payload)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "triggered"
+        assert data["repo"] == "testowner/testrepo"
+        assert data["pr_number"] == 217
+
+
+def test_dynamic_coder_agent():
+    """Verifies that CoderAgent under scenario='dynamic' initializes with the dynamic system prompt."""
+    coder = CoderAgent(
+        name_suffix="test",
+        scenario="dynamic",
+        pr_diff="my-custom-diff",
+        file_contents="my-custom-file-contents"
+    )
+    assert coder.scenario == "dynamic"
+    assert "Lead Coder Agent" in coder.system_prompt
+    assert "my-custom-diff" in coder.system_prompt
+    assert "my-custom-file-contents" in coder.system_prompt
+    # Ensure it instructs Coder to comply with contract constraints and write Python code
+    assert "Python" in coder.system_prompt
+    assert "comply" in coder.system_prompt or "complies" in coder.system_prompt
+
+
+def test_generate_dynamic_reviewers():
+    """Verifies that generate_dynamic_reviewers returns context-appropriate agent roles and domains."""
+    from src.server import generate_dynamic_reviewers
+    
+    # 1. Billing file
+    a1, a2 = generate_dynamic_reviewers(["src/billing/spending.py"], "test")
+    assert a1.role == "Billing & Financial SME"
+    assert a1.domain == "billing"
+    assert a2.role == "Code Architecture SME"
+    assert a2.domain == "architecture"
+
+    # 2. Environment config file
+    a1, a2 = generate_dynamic_reviewers([".env.example"], "test")
+    assert a1.role == "Environment Configuration Security SME"
+    assert a1.domain == "security"
+
+    # 3. SQL schema file
+    a1, a2 = generate_dynamic_reviewers(["schema.sql"], "test")
+    assert a1.role == "Database Schema Compliance SME"
+    assert a1.domain == "database"
+
+    # 4. Docs file
+    a1, a2 = generate_dynamic_reviewers(["README.md"], "test")
+    assert a1.role == "Documentation & Standards SME"
+    assert a1.domain == "documentation"
+
+    # 5. Cart file and tests
+    a1, a2 = generate_dynamic_reviewers(["src/cart/checkout.py", "tests/test_checkout.py"], "test")
+    assert a1.role == "Auth & Security SME" # default
+    assert a2.role == "Cart & Order Integration SME"
+    assert a2.domain == "cart"
+
+    # 6. API contract file (domain api)
+    a1, a2 = generate_dynamic_reviewers(["src/api/v1/contract.json"], "test")
+    assert a1.role == "Auth & Security SME" # default
+    assert a2.role == "API Contract & Integration SME"
+    assert a2.domain == "api"
+
+    # 7. QA and Test files (domain qa)
+    a1, a2 = generate_dynamic_reviewers(["tests/test_auth.py"], "test")
+    assert a1.role == "Auth & Security SME" # default
+    assert a2.role == "QA & Test Verification SME"
+    assert a2.domain == "qa"
+
+    # 8. Multiple docs files (domain documentation, safety/fallback architecture)
+    a1, a2 = generate_dynamic_reviewers(["docs/index.md", "README.md"], "test")
+    assert a1.role == "Documentation & Standards SME"
+    assert a1.domain == "documentation"
+    assert a2.role == "Code Architecture SME"
+    assert a2.domain == "architecture"
+
+    # 9. Docs and test files (domain documentation and domain qa)
+    a1, a2 = generate_dynamic_reviewers(["README.md", "tests/test_system.py"], "test")
+    assert a1.role == "Documentation & Standards SME"
+    assert a1.domain == "documentation"
+    assert a2.role == "QA & Test Verification SME"
+    assert a2.domain == "qa"
+
+    # 10. Doc file and other domain file to trigger Technical Writing SME for role2
+    a1, a2 = generate_dynamic_reviewers(["src/billing/spending.py", "README.md"], "test")
+    assert a1.role == "Billing & Financial SME"
+    assert a1.domain == "billing"
+    assert a2.role == "Technical Writing SME"
+    assert a2.domain == "documentation"
+
+
+def test_detect_mcp_targets():
+    """Verifies that detect_mcp_targets dynamically parses code contents to identify PostgreSQL and API targets."""
+    from src.server import detect_mcp_targets
+    
+    # 1. Code with billing tables
+    contents = {
+        "report.py": "SELECT spending_limit_usd FROM billing_profiles WHERE user_id = 1"
+    }
+    targets = detect_mcp_targets(["report.py"], contents)
+    assert targets["schema_table"] == "billing_profiles"
+    assert "/api/v1/billing/spending" in targets["api_endpoint"]
+    assert targets["rbac_target"] == "billing_profiles.spending_limit_usd"
+
+    # 2. Code with checkout API calls
+    contents2 = {
+        "checkout.py": "api_post('/api/v1/checkout', data={'cart_id': 1})"
+    }
+    targets2 = detect_mcp_targets(["checkout.py"], contents2)
+    assert "/api/v1/checkout" in targets2["api_endpoint"]
+    
+    # 3. Unknown table/columns
+    contents3 = {
+        "app.py": "print('hello world')"
+    }
+    targets3 = detect_mcp_targets(["app.py"], contents3)
+    assert "No database tables detected" in targets3["schema_table"]
+    assert "No API routes detected" in targets3["api_endpoint"]
+
+
+def test_format_scorecard_comment():
+    """Verifies that format_scorecard_comment formats the markdown scorecard correctly."""
+    from src.server import format_scorecard_comment
+    
+    class DummyState:
+        pr_id = "PR-99"
+        scenario = "test-scenario"
+        status = "COMPLETED"
+        resolution_type = "consensus"
+        consensus_round = 2
+        schema_check = {"compliant": True, "violations": []}
+        openapi_check = {"compliant": False, "violations": ["Path mismatch"]}
+        rbac_check = {"compliant": True, "violations": []}
+        watchdog_logs = [{"service": "billing", "message": "High latency"}]
+        debate_summary = {
+            "round_history": [
+                {"round": 1, "outcome": "rejected"},
+                {"round": 2, "outcome": "approved"}
+            ]
+        }
+        triage_result = {
+            "status": "PENDING_HUMAN_APPROVAL",
+            "required_approvals": ["@security-owners-pool"]
+        }
+        
+    state = DummyState()
+    comment = format_scorecard_comment(state)
+    
+    assert "# 🛡️ Governance Swarm Audit Scorecard: PR-99" in comment
+    assert "- **Scenario:** `test-scenario`" in comment
+    assert "- **Status:** `COMPLETED`" in comment
+    assert "- **Resolution:** `consensus`" in comment
+    assert "- **Consensus Rounds:** `2`" in comment
+    assert "**PostgreSQL Schema Compliance** | ✅ Passed" in comment
+    assert "**OpenAPI Contract Compliance** | ❌ Failed" in comment
+    assert "Path mismatch" in comment
+    assert "- **billing**: High latency" in comment
+    assert "- **Round 1:** REJECTED" in comment
+    assert "- **Round 2:** APPROVED" in comment
+
+
+@patch("urllib.request.urlopen")
+def test_post_github_pr_comment_mocked(mock_urlopen):
+    """Verifies that post_github_pr_comment correctly calls the GitHub API or falls back to issue creation."""
+    from src.swarm import post_github_pr_comment
+    
+    # Mock successful POST to PR comments
+    mock_resp = MagicMock()
+    mock_resp.getcode.return_value = 201
+    mock_urlopen.return_value.__enter__.return_value = mock_resp
+    
+    with patch("src.swarm.config", {"GH_TOKEN": "mock-token", "GITHUB_REPO": "mock/repo"}):
+        res = post_github_pr_comment("PR-123", "Nice scorecard body")
+        assert res is True
+        
+        # Verify call arguments
+        assert mock_urlopen.call_count == 1
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "https://api.github.com/repos/mock/repo/issues/123/comments"
+        assert req.headers["Authorization"] == "Bearer mock-token"
+        assert req.get_method() == "POST"
+
+
+def test_api_submit_consent_validation():
+    """Verifies that POST /api/consent acts appropriately depending on current status."""
+    client = TestClient(app)
+    state.reset()
+    
+    # 1. Reject if not pending/halted
+    state.status = "IDLE"
+    res = client.post("/api/consent", json={"approve": True})
+    assert res.status_code == 400
+    assert "Cannot submit consent" in res.json()["detail"]
+    
+    # 2. Accept if pending
+    state.status = "PENDING_HUMAN_APPROVAL"
+    state.pr_id = "PR-consent-test"
+    res2 = client.post("/api/consent", json={"approve": True})
+    assert res2.status_code == 200
+    assert res2.json()["status"] == "ok"
+    assert res2.json()["consent"] is True
+    assert state.human_consent is True
+    
+    # Clean up
+    state.reset()
+
+
+@pytest.mark.asyncio
+@patch("thenvoi_rest.AsyncRestClient")
+async def test_initialize_session_room_limit_fallback(mock_rest_client):
+    """Verifies that initialize_session reuses an existing chat room if the platform limit is hit."""
+    from src.swarm import SwarmSession, Agent, CoderAgent, ReviewerAgent
+    import datetime
+    
+    session = SwarmSession(
+        pr_id="pr_limit_fallback_test",
+        diff_files=["src/billing/billing_service.py"],
+        codeowners_path="mock_infrastructure/CODEOWNERS",
+        schema_path="mock_infrastructure/postgres_schema.sql",
+        openapi_path="mock_infrastructure/openapi_contract.json",
+        log_path="mock_infrastructure/app_logs.json"
+    )
+    session.human_key = "band_u_mock"
+    
+    # 1. Setup mock responses for human_client and agent_client
+    mock_agents_list = MagicMock()
+    mock_agents_list.data = []
+    
+    mock_human = MagicMock()
+    mock_human.human_api_agents.list_my_agents = AsyncMock(return_value=mock_agents_list)
+    
+    mock_reg = MagicMock()
+    mock_reg.data.agent.id = "agent-id"
+    mock_reg.data.credentials.api_key = "agent-key"
+    mock_human.human_api_agents.register_my_agent = AsyncMock(return_value=mock_reg)
+    
+    conductor = Agent("conductor-test", "Orchestrator", "Prompt")
+    coder = CoderAgent()
+    reviewer = ReviewerAgent("Auth & Fraud SME")
+    
+    # Mock conductor.rest_client after initialize_session
+    mock_agent_client = MagicMock()
+    
+    # Mock create_agent_chat to fail with limit_reached exception
+    limit_err = Exception("limit_reached: Chat room limit reached. Upgrade to create more.")
+    mock_agent_client.agent_api_chats.create_agent_chat = AsyncMock(side_effect=limit_err)
+    
+    # Mock list_agent_chats to return existing chats
+    mock_chat_obj = MagicMock()
+    mock_chat_obj.id = "reused-room-id"
+    mock_chat_obj.updated_at = datetime.datetime(2026, 6, 13, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    
+    mock_chats_list = MagicMock()
+    mock_chats_list.data = [mock_chat_obj]
+    mock_agent_client.agent_api_chats.list_agent_chats = AsyncMock(return_value=mock_chats_list)
+    
+    mock_agent_client.agent_api_participants.add_agent_chat_participant = AsyncMock()
+    
+    # Define client routing mock
+    mock_rest_client.side_effect = lambda api_key, base_url: mock_human if api_key and ("band_u" in str(api_key)) else mock_agent_client
+    
+    # Initialize session and verify fallback
+    await session.initialize_session(conductor, coder, [reviewer])
+    
+    assert session.room_id == "reused-room-id"
+    assert mock_agent_client.agent_api_chats.create_agent_chat.call_count == 1
+    assert mock_agent_client.agent_api_chats.list_agent_chats.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_analyze_pr_for_swarm_fallback():
+    """Verifies that analyze_pr_for_swarm falls back to heuristic default when client is None."""
+    from src.server import analyze_pr_for_swarm
+    import src.swarm
+    
+    orig_client = src.swarm.client
+    src.swarm.client = None
+    
+    try:
+        res = await analyze_pr_for_swarm(
+            pr_diff="diff --git a/src/billing/spending.py b/src/billing/spending.py",
+            pr_title="Implement spending report",
+            diff_files=["src/billing/spending.py"]
+        )
+        assert "reviewers" in res
+        assert len(res["reviewers"]) == 2
+        assert res["reviewers"][0]["domain"] == "billing"
+        assert res["mcp_targets"]["schema_table"] == "No database tables detected"
+    finally:
+        src.swarm.client = orig_client
+
+
+@pytest.mark.asyncio
+async def test_analyze_pr_for_swarm_with_mock_llm():
+    """Verifies that analyze_pr_for_swarm parses valid LLM response JSON."""
+    from src.server import analyze_pr_for_swarm
+    import src.swarm
+    from unittest.mock import MagicMock
+    
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_choice = MagicMock()
+    mock_message = MagicMock()
+    
+    mock_message.content = """
+    {
+      "reviewers": [
+        {
+          "role": "Custom Security SME",
+          "domain": "security",
+          "system_prompt": "Audit for security",
+          "model": "unsloth/Meta-Llama-3.1-70B-Instruct"
+        },
+        {
+          "role": "Custom QA SME",
+          "domain": "qa",
+          "system_prompt": "Audit for tests",
+          "model": "gpt-4o-mini"
+        }
+      ],
+      "additional_files": ["config.json"],
+      "mcp_targets": {
+        "schema_table": "users",
+        "api_endpoint": "/api/v1/users",
+        "rbac_target": "users.role"
+      }
+    }
+    """
+    mock_choice.message = mock_message
+    mock_resp.choices = [mock_choice]
+    mock_client.chat.completions.create = MagicMock(return_value=mock_resp)
+    
+    orig_client = src.swarm.client
+    src.swarm.client = mock_client
+    
+    try:
+        res = await analyze_pr_for_swarm(
+            pr_diff="some diff",
+            pr_title="some title",
+            diff_files=["some_file.py"]
+        )
+        assert "reviewers" in res
+        assert len(res["reviewers"]) == 2
+        assert res["reviewers"][0]["role"] == "Custom Security SME"
+        assert res["reviewers"][1]["domain"] == "qa"
+        assert res["additional_files"] == ["config.json"]
+        assert res["mcp_targets"]["schema_table"] == "users"
+    finally:
+        src.swarm.client = orig_client
+
+
+
+
+
+

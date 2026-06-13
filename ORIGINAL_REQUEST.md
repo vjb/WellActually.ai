@@ -140,3 +140,56 @@ Integrity mode: benchmark
 - Create a final prioritized action plan at `C:\Users\vjbel\.gemini\antigravity\brain\c72e6410-a1e3-46ef-8bd6-0d759205f567\action_plan_v5.md`.
 - Confirm that no High or Medium priority shortcomings remain.
 - The action plan must explicitly verify that **no High or Medium priority items remain**.
+
+## Follow-up — 2026-06-13T16:12:45Z
+
+Upgrade the WellActually.ai platform from a scripted hackathon demo into an open-ended, production-ready code governance system. The platform will support arbitrary repository inputs, automated webhook simulations, interactive visual dashboard diagrams/charts, autonomous agent reasoning, and containerized zero-dependency execution.
+
+Working directory: `c:\Users\vjbel\hacks\BOA`
+Integrity mode: demo
+
+## Requirements
+
+### R1. Dynamic Repository & PR Loader
+- The React dashboard must include a Repository path input field (e.g. `owner/repo`) and a Pull Request selector dropdown.
+- The FastAPI backend must query the GitHub API to fetch open pull requests for the specified repository.
+- Selecting a pull request must load its metadata, list of modified files, and raw code diffs dynamically. The compliance swarm must run its audits directly on these parsed code changes.
+
+### R2. Webhook Listener & Simulation UI
+- The FastAPI server must expose a webhook endpoint `POST /api/webhooks/github` that listens for GitHub `pull_request` event payloads (e.g. `opened`, `synchronize`, `reopened`).
+- Receipt of a webhook must trigger the compliance triage and swarm debate in the background, ultimately posting the scorecard comment back to the GitHub PR.
+- Add a **"Simulate Webhook Trigger"** button on the dashboard that POSTs a mock payload to `/api/webhooks/github` to demonstrate the active webhook-driven workflow.
+
+### R3. Visual Observability Dashboard (Rich Aesthetics)
+- **Agent Diagram**: Render an interactive SVG-based or Mermaid.js-based conversation diagram showing the connection topology of the swarm agents, visually highlighting which agent is speaking/active in real time.
+- **SQL AST Visualizer**: Render a visual representation of the extracted SQL AST, clearly showing target tables, queried columns, and their database schema match status (green/red).
+- **Watchdog Telemetry Charts**: Display a real-time line/bar chart in the telemetry watchdog panel representing connection rates or latency warnings from the log stream.
+
+### R4. Autonomous Agent Reasoning
+- Refactor the agent system prompts in `src/swarm.py` to remove hardcoded scenario constraints.
+- Coder and reviewer agents must dynamically generate and evaluate code proposals based on the actual pull request diff and the live MCP schema/contract check results, rather than relying on preset narrative behaviors.
+
+### R5. Frictionless Containerization & SQLite Fallback
+- Provide a root-level `docker-compose.yml` that configures and links PostgreSQL, FastAPI, and React frontend services to run out-of-the-box.
+- Implement an embedded SQLite/DuckDB database MCP server written in Python to act as a zero-dependency live check fallback. If the PostgreSQL/Node.js setup is unavailable, this Python database client must dynamically inspect query schemas, removing setup friction.
+
+## Acceptance Criteria
+
+### Deliverables
+- [ ] React dashboard exposes repository input, PR selector, Simulate Webhook button, live agent diagram, AST parse tree, and watchdog charts.
+- [ ] FastAPI server implements the `/api/webhooks/github` endpoint.
+- [ ] Working `docker-compose.yml` file is created in the root directory.
+- [ ] `post_github_pr_comment` posts scorecard comments (or fallback issues) for loaded PRs.
+- [ ] Swarm reviews execute dynamically on loaded code changes instead of using pre-scripted code proposal stubs.
+- [ ] The entire 36-test pytest suite remains passing.
+
+## Follow-up — 2026-06-13T16:19:13Z
+
+The user has added new tests to `tests/test_swarm.py`: `test_github_pr_loader_fallback`, `test_webhook_listener_trigger`, and `test_dynamic_coder_agent`.
+The following requirements must be met:
+1. `/api/github/prs` endpoint to retrieve pull requests for a given repository.
+2. `/api/github/pr-details` endpoint to load PR details, list of modified files, and raw code diffs (with fallback mock PRs 217 and 104 as checked by the tests).
+3. `POST /api/webhooks/github` to parse pull request event payloads, triggering the simulation loop asynchronously in the background.
+4. Ensure `run_simulation_task` is exposed or importable from `src.server`.
+5. CoderAgent supports `scenario="dynamic"` and is initialized with the custom system prompt containing PR diff and current file contents.
+6. Verify that all tests (now 39/40 tests) pass.

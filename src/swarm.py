@@ -86,7 +86,7 @@ class Agent:
         import asyncio
 
         # Determine the client and model to route to
-        is_featherless = self.model.startswith("unsloth/") or "llama" in self.model.lower()
+        is_featherless = self.model.startswith("unsloth/")
         active_client = featherless_client if (is_featherless and featherless_client) else client
         active_model = self.model
 
@@ -110,45 +110,51 @@ class Agent:
                 "content": f"[{sender_info}]: {content_clean}"
             })
 
-        async def make_call(target_client, target_model):
+        async def make_call(target_client, target_model, timeout_val=15.0):
             response = await asyncio.to_thread(
                 target_client.chat.completions.create,
                 model=target_model,
                 messages=api_messages,
                 max_tokens=Agent.DEFAULT_MAX_TOKENS,
                 temperature=Agent.DEFAULT_TEMPERATURE,
-                timeout=15.0  # Explicit timeout
+                timeout=timeout_val
             )
             return response.choices[0].message.content.strip()
 
-        # Resilient custom retry loop with exponential backoff and provider fallback
+        # If Featherless, run with shorter timeout and fallback immediately (no retries) to avoid cold-start stalls
+        if is_featherless:
+            try:
+                return await make_call(active_client, active_model, timeout_val=10.0)
+            except Exception as primary_err:
+                logger.warning(
+                    f"Featherless primary model query failed/timed out for agent {self.name}: {primary_err}"
+                )
+                if client:
+                    logger.warning(f"Attempting immediate fallback to AIML API (gpt-4o-mini) for agent {self.name}...")
+                    try:
+                        return await make_call(client, "gpt-4o-mini", timeout_val=15.0)
+                    except Exception as fallback_err:
+                        logger.error(f"Immediate fallback query to AIML API also failed: {fallback_err}")
+                        raise fallback_err
+                else:
+                    raise primary_err
+
+        # Resilient custom retry loop with exponential backoff for non-Featherless
         max_retries = 3
         delay = 1.0
         backoff_factor = 2.0
 
         for attempt in range(max_retries + 1):
             try:
-                # Try the primary client/model
-                return await make_call(active_client, active_model)
+                return await make_call(active_client, active_model, timeout_val=15.0)
             except Exception as primary_err:
                 logger.warning(
                     f"Primary model query failed for agent {self.name} on attempt {attempt + 1}/{max_retries + 1}: {primary_err}"
                 )
-                
-                # Check if we should fallback from Featherless to AIML API
-                if is_featherless and (featherless_client is None or active_client == featherless_client) and client:
-                    logger.warning(f"Attempting fallback to AIML API for agent {self.name}...")
-                    fallback_model = "meta-llama/Llama-3-70b-instruct-hf" if "70b" in self.model.lower() else "meta-llama/Llama-3-8b-instruct-hf"
-                    try:
-                        return await make_call(client, fallback_model)
-                    except Exception as fallback_err:
-                        logger.error(f"Fallback query to AIML API also failed: {fallback_err}")
-                
                 if attempt == max_retries:
                     logger.error(f"Agent {self.name} query completely failed after all retries.")
                     raise primary_err
                 
-                # Exponential backoff with jitter
                 sleep_time = delay * (0.5 + random.random())
                 await asyncio.sleep(sleep_time)
                 delay *= backoff_factor
@@ -193,10 +199,23 @@ class CoderAgent(Agent):
         ),
     }
 
-    def __init__(self, name_suffix: str = "", model: str = "gpt-4o-mini", scenario: str = "rbac_bypass"):
+    def __init__(self, name_suffix: str = "", model: str = "gpt-4o-mini", scenario: str = "rbac_bypass", pr_diff: str = "", file_contents: str = ""):
         name = f"coder-{name_suffix}" if name_suffix else "coder-agent"
-        system_prompt = self.SCENARIO_PROMPTS.get(scenario, self.SCENARIO_PROMPTS["rbac_bypass"])
         self.scenario = scenario
+        self.pr_diff = pr_diff
+        self.file_contents = file_contents
+        if scenario == "rbac_bypass":
+            system_prompt = self.SCENARIO_PROMPTS["rbac_bypass"]
+        else:
+            system_prompt = (
+                "You are the Lead Coder Agent. Your task is to write and refactor Python code "
+                "that satisfies the functional goals of the pull request and complies with all schema, "
+                "security, and contract constraints. You must write clean, correct code based on the provided "
+                "file contents, PR diff, and reviewer feedback.\n"
+                f"PR Diff:\n{pr_diff}\n"
+                f"Current File Contents:\n{file_contents}\n"
+                "Keep your response concise: a brief explanation of what you changed followed by a single Python code block. No essays."
+            )
         super().__init__(name=name, role="Lead Coder", system_prompt=system_prompt, model=model)
 
 
@@ -233,30 +252,31 @@ class ReviewerAgent(Agent):
         ),
     }
 
-    def __init__(self, role: str, name_suffix: str = "", model: str = "gpt-4o-mini", domain: str = "auth"):
+    def __init__(self, role: str, name_suffix: str = "", model: str = "gpt-4o-mini", domain: str = "auth", system_prompt_override: Optional[str] = None):
         name = f"reviewer-{role.replace(' ', '_').replace('&', 'and').lower()}-{name_suffix}" if name_suffix else f"reviewer-{role.replace(' ', '_').replace('&', 'and').lower()}"
         domain_ctx = self.DOMAIN_CONTEXT.get(domain, "")
+        base_prompt = system_prompt_override if system_prompt_override else f"You are the {role} Agent. Your job is to act as a strict codebase validator and SME. {domain_ctx}"
+        
         system_prompt = (
-            f"You are the {role} Agent. "
-            "Your job is to act as a strict codebase validator and SME.\n"
+            f"{base_prompt}\n\n"
             "Guidelines:\n"
             "1. You review proposals submitted by the Lead Coder.\n"
-            "2. You will be provided with the results of automated compliance checks for your domain.\n"
-            "3. If there are violations in the compliance checks, you MUST reject the code. "
+            "2. Your review must be dynamic and based on the provided MCP compliance logs (PostgreSQL schema and OpenAPI contract check logs).\n"
+            "3. If there are violations in the compliance checks in your domain, you MUST reject the code. "
             "You MUST output '❌ REVIEW FAILED:' at the very start of your message and detail the specific violations.\n"
             "4. If and only if there are zero compliance violations in your domain, output '✓ REVIEW PASSED:' "
             "at the start of your message.\n"
-            f"5. {domain_ctx}"
         )
         self.domain = domain
         super().__init__(name=name, role=role, system_prompt=system_prompt, model=model)
 
-    async def review_code(self, coder_code: str, schema_path: str, openapi_path: str, messages: List[Dict[str, Any]]) -> str:
+    async def review_code(self, coder_code: str, schema_path: str, openapi_path: str, messages: List[Dict[str, Any]], coder_name: str = "coder", conductor_name: str = "conductor") -> str:
         """
         Executes domain-specific compliance checks and injects results as context before LLM query.
         Pass None for schema_path or openapi_path to skip that check for this reviewer's domain.
         """
         context_parts = []
+        context_parts.append(f"Task Room Participants: Coder is @{coder_name}, Conductor is @{conductor_name}. Make sure to mention them (e.g. @{coder_name}) when giving your review.")
 
         # Schema check (Auth SME domain)
         if schema_path:
@@ -351,11 +371,22 @@ class SwarmSession:
         logger.info(f"[BAND REST] Initializing Human Rest Client...")
         self.human_client = thenvoi_rest.AsyncRestClient(api_key=self.human_key, base_url=self.base_url)
 
-        # Query current registered agents count to determine if we should reuse pre-registered keys
+        # Query current registered agents count
         logger.debug(f"[BAND REST] Querying current agent count...")
         existing_agents_resp = await self.human_client.human_api_agents.list_my_agents()
         existing_agents = existing_agents_resp.data
         logger.info(f"[BAND REST] Found {len(existing_agents)} existing agents.")
+
+        # Zero-Trust Slate Clearance to prevent exceeding the 10-agent platform limit
+        if existing_agents:
+            logger.info(f"[BAND REST] Clearing out {len(existing_agents)} existing agents to start with a clean slate...")
+            for agent_info in existing_agents:
+                try:
+                    await self.human_client.human_api_agents.delete_my_agent(id=agent_info.id)
+                    logger.info(f"[BAND REST] Deleted stale agent {agent_info.name} (ID: {agent_info.id}).")
+                except Exception as e:
+                    logger.error(f"[BAND REST] Failed to delete stale agent {agent_info.name}: {e}")
+            existing_agents = []
 
         if len(existing_agents) >= 9:
             logger.info(f"[BAND REST] Agent limit (10) nearly reached. Reusing pre-registered agents...")
@@ -398,6 +429,10 @@ class SwarmSession:
             coder.rest_client = thenvoi_rest.AsyncRestClient(api_key=coder.api_key, base_url=self.base_url)
 
             # Map Reviewers
+            if len(reviewers) > 2:
+                logger.warning(f"[BAND REST] Reused key mode active. Truncating dynamic reviewers list from {len(reviewers)} to 2.")
+                del reviewers[2:]
+
             if len(reviewers) > 0:
                 rev = reviewers[0]
                 rev.band_name = REUSED_KEYS["reviewer_auth"]["name"]
@@ -437,27 +472,61 @@ class SwarmSession:
                 rev.api_key = reg_rev.data.credentials.api_key
                 rev.rest_client = thenvoi_rest.AsyncRestClient(api_key=rev.api_key, base_url=self.base_url)
 
-        # 2. Create Chat Room as the Conductor
+        # 2. Create Chat Room as the Conductor (or reuse an existing one if limit reached)
         logger.info(f"[BAND REST] Creating Chat Room as Conductor agent...")
-        room_resp = await conductor.rest_client.agent_api_chats.create_agent_chat(
-            chat=thenvoi_rest.ChatRoomRequest()
-        )
-        self.room_id = room_resp.data.id
-        logger.info(f"[BAND REST] Room created successfully. ID: {self.room_id}")
+        try:
+            room_resp = await conductor.rest_client.agent_api_chats.create_agent_chat(
+                chat=thenvoi_rest.ChatRoomRequest()
+            )
+            self.room_id = room_resp.data.id
+            logger.info(f"[BAND REST] Room created successfully. ID: {self.room_id}")
+        except Exception as e:
+            # Check if this is a limit_reached error
+            is_limit_reached = "limit_reached" in str(e) or "limit" in str(e).lower() or (hasattr(e, "status_code") and e.status_code == 403)
+            if is_limit_reached:
+                logger.warning(f"[BAND REST] Chat room limit reached or creation failed: {e}. Attempting to reuse an existing chat room...")
+                try:
+                    existing_chats_resp = await conductor.rest_client.agent_api_chats.list_agent_chats()
+                    existing_chats = existing_chats_resp.data
+                    if existing_chats:
+                        import datetime
+                        def get_chat_date(x):
+                            dt = getattr(x, "updated_at", None) or getattr(x, "inserted_at", None)
+                            if dt is None:
+                                return datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+                            if dt.tzinfo is None:
+                                return dt.replace(tzinfo=datetime.timezone.utc)
+                            return dt
+                        existing_chats.sort(key=get_chat_date, reverse=True)
+                        self.room_id = existing_chats[0].id
+                        logger.info(f"[BAND REST] Reusing existing chat room ID: {self.room_id}")
+                    else:
+                        raise ValueError("No existing chat rooms found to reuse.") from e
+                except Exception as list_err:
+                    logger.error(f"[BAND REST] Failed to list existing chat rooms for fallback: {list_err}")
+                    raise e
+            else:
+                raise e
 
         # 3. Add Coder and Reviewers to the Room
         logger.debug(f"[BAND REST] Adding Coder agent as participant...")
-        await conductor.rest_client.agent_api_participants.add_agent_chat_participant(
-            chat_id=self.room_id,
-            participant=thenvoi_rest.ParticipantRequest(participant_id=coder.agent_id, role="member")
-        )
+        try:
+            await conductor.rest_client.agent_api_participants.add_agent_chat_participant(
+                chat_id=self.room_id,
+                participant=thenvoi_rest.ParticipantRequest(participant_id=coder.agent_id, role="member")
+            )
+        except Exception as add_err:
+            logger.warning(f"[BAND REST] Failed to add Coder participant (they might be a member already): {add_err}")
 
         for rev in reviewers:
             logger.debug(f"[BAND REST] Adding Reviewer agent {rev.name} as participant...")
-            await conductor.rest_client.agent_api_participants.add_agent_chat_participant(
-                chat_id=self.room_id,
-                participant=thenvoi_rest.ParticipantRequest(participant_id=rev.agent_id, role="member")
-            )
+            try:
+                await conductor.rest_client.agent_api_participants.add_agent_chat_participant(
+                    chat_id=self.room_id,
+                    participant=thenvoi_rest.ParticipantRequest(participant_id=rev.agent_id, role="member")
+                )
+            except Exception as add_err:
+                logger.warning(f"[BAND REST] Failed to add Reviewer participant {rev.name} (they might be a member already): {add_err}")
 
     def add_message(self, sender: str, role: str, content: str):
         """Adds a message to the internal history."""
@@ -488,7 +557,10 @@ class SwarmSession:
         fall back to local JSON storage. Other SDK errors propagate.
         """
         # 1. Generate code from coder
-        coder_response = await coder.generate_response(self.messages)
+        reviewer_mentions = ", ".join([f"@{r.name} ({r.role})" for r in reviewers])
+        reviewer_handles_only = " or ".join([f"@{r.name}" for r in reviewers])
+        coder_context = f"Task Room Participants: Conductor is @{conductor.name}. Reviewers are: {reviewer_mentions}. If you are revising code based on their feedback, make sure to address them using their handles (e.g. {reviewer_handles_only})."
+        coder_response = await coder.generate_response(self.messages, context=coder_context)
         self.add_message(coder.name, coder.role, coder_response)
 
         # Post message as Coder (mentioning Conductor)
@@ -504,8 +576,8 @@ class SwarmSession:
         round_passed = True
         reviewer_responses = []
 
-        # 2. Run reviews
-        for reviewer in reviewers:
+        # 2. Run reviews concurrently
+        async def review_task(reviewer):
             # Rehydrate Context from Band.ai Chat Context endpoint before reviewing
             logger.debug(f"[BAND REST] Rehydrating Chat Context for {reviewer.name}...")
             await reviewer.rest_client.agent_api_context.get_agent_chat_context(chat_id=self.room_id)
@@ -528,16 +600,16 @@ class SwarmSession:
                     raise e
 
             # Route domain-specific MCP context to each reviewer
-            r_schema = self.schema_path if getattr(reviewer, 'domain', 'auth') == 'auth' else None
-            r_openapi = self.openapi_path if getattr(reviewer, 'domain', 'cart') == 'cart' else None
+            r_schema = self.schema_path if getattr(reviewer, "domain", "") in ["auth", "database", "billing", "security"] else None
+            r_openapi = self.openapi_path if getattr(reviewer, "domain", "") in ["cart", "api"] else None
             review = await reviewer.review_code(
                 coder_response,
                 r_schema,
                 r_openapi,
-                self.messages
+                self.messages,
+                coder_name=coder.name,
+                conductor_name=conductor.name
             )
-            self.add_message(reviewer.name, reviewer.role, review)
-            reviewer_responses.append((reviewer.name, reviewer.role, review))
 
             # Post message as Reviewer (mentioning Coder)
             logger.debug(f"[BAND REST] Posting Reviewer message to room...")
@@ -549,19 +621,9 @@ class SwarmSession:
                 )
             )
 
-            # Record per-reviewer vote in ConsensusTracker
-            review_failed = "❌ REVIEW FAILED" in review or "REVIEW FAILED" in review
-            current_round = self.tracker.rounds.get(self.pr_id, 0) + 1
-            self.tracker.record_vote(
-                self.pr_id, reviewer.name, reviewer.role,
-                "failed" if review_failed else "passed",
-                current_round,
-                domain=getattr(reviewer, 'domain', '')
-            )
-
             # If review failed, store violation memory
+            review_failed = "❌ REVIEW FAILED" in review or "REVIEW FAILED" in review
             if review_failed:
-                round_passed = False
                 # Extract a concise violation summary from the review (first 200 chars after FAILED)
                 violation_summary = review.split("FAILED", 1)[-1][:200].strip(": ") if "FAILED" in review else review[:200]
                 logger.debug(f"[BAND REST] Storing violation memory for {reviewer.name}...")
@@ -590,6 +652,27 @@ class SwarmSession:
                         )
                     else:
                         raise e
+            return reviewer, review
+
+        # Run all reviewer tasks concurrently using asyncio.gather
+        review_tasks = [review_task(r) for r in reviewers]
+        completed_reviews = await asyncio.gather(*review_tasks)
+
+        for reviewer, review in completed_reviews:
+            self.add_message(reviewer.name, reviewer.role, review)
+            reviewer_responses.append((reviewer.name, reviewer.role, review))
+
+            # Record per-reviewer vote in ConsensusTracker
+            review_failed = "❌ REVIEW FAILED" in review or "REVIEW FAILED" in review
+            current_round = self.tracker.rounds.get(self.pr_id, 0) + 1
+            self.tracker.record_vote(
+                self.pr_id, reviewer.name, reviewer.role,
+                "failed" if review_failed else "passed",
+                current_round,
+                domain=getattr(reviewer, 'domain', '')
+            )
+            if review_failed:
+                round_passed = False
 
         # 3. Register outcome in ConsensusTracker
         outcome = "approved" if round_passed else "failed"
@@ -629,6 +712,7 @@ class SwarmSession:
         """
         Tries to delete registered agents. Prints any deletion restrictions.
         """
+        # Always clean up dynamic JIT agents on completion/cancellation
         if self.reused:
             logger.info("[BAND REST] Reused agents in execution. Preserving credentials/IDs for subsequent runs.")
             return
@@ -643,7 +727,7 @@ class SwarmSession:
                     except Exception as e:
                         logger.error(f"[BAND REST] Failed to delete agent {agent.name}: {e}")
 
-def post_github_pr_comment(pr_id: str, body: str) -> bool:
+def post_github_pr_comment(pr_id: str, body: str, repo: Optional[str] = None) -> bool:
     """
     Posts a markdown scorecard comment to GitHub using the Issues API:
     POST /repos/{repo}/issues/{pr_number}/comments
@@ -656,7 +740,8 @@ def post_github_pr_comment(pr_id: str, body: str) -> bool:
     import re
 
     gh_token = config.get("GH_TOKEN")
-    repo = config.get("GITHUB_REPO")
+    if not repo:
+        repo = config.get("GITHUB_REPO")
 
     if not gh_token or not repo:
         logger.warning("GitHub commenting skipped: GH_TOKEN or GITHUB_REPO not configured in environment.")

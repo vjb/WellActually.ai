@@ -662,6 +662,8 @@ class SwarmState:
         self.reviewer_auth_domain = "auth"
         self.reviewer_cart_role = "Cart SME"
         self.reviewer_cart_domain = "cart"
+        self.model_preset = "hybrid"
+        self.model_assignments = {}
 
     def save_state(self):
         """Serializes the current SwarmState to a local mock database file."""
@@ -697,7 +699,9 @@ class SwarmState:
             "reviewer_auth_role": self.reviewer_auth_role,
             "reviewer_auth_domain": self.reviewer_auth_domain,
             "reviewer_cart_role": self.reviewer_cart_role,
-            "reviewer_cart_domain": self.reviewer_cart_domain
+            "reviewer_cart_domain": self.reviewer_cart_domain,
+            "model_preset": self.model_preset,
+            "model_assignments": self.model_assignments
         }
         try:
             os.makedirs("mock_infrastructure", exist_ok=True)
@@ -706,7 +710,7 @@ class SwarmState:
         except Exception as e:
             logger.error(f"Failed to save state to session_state.json: {e}")
 
-    def reset(self, scenario: str = "rbac_bypass", repo: Optional[str] = None, pr_number: Optional[int] = None):
+    def reset(self, scenario: str = "rbac_bypass", repo: Optional[str] = None, pr_number: Optional[int] = None, model_preset: Optional[str] = "hybrid", model_assignments: Optional[Dict[str, str]] = None):
         self.status = "IDLE"
         self.events = []
         self.active_agents = []
@@ -717,6 +721,8 @@ class SwarmState:
         self.pr_title = None
         self.pr_branch = None
         self.loaded_file_contents = {}
+        self.model_preset = model_preset or "hybrid"
+        self.model_assignments = model_assignments or {}
         if repo and pr_number:
             self.pr_id = f"PR-{pr_number}"
             self.diff_files = []
@@ -1103,7 +1109,31 @@ async def run_simulation_task():
     await asyncio.sleep(0.4)
     
     unique_suffix = session.unique_suffix
-    conductor = Agent(name=f"conductor-{unique_suffix}", role="Orchestrator", system_prompt="You are the Conductor orchestrating the debate.")
+    
+    # ── Swarm Model Routing Logic ────────────────────────────────────
+    conductor_model = "gpt-4o-mini"
+    coder_model = "gpt-4o-mini"
+    high_stakes_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
+    general_model = "gpt-4o-mini"
+    
+    if state.model_preset == "featherless":
+        conductor_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
+        coder_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
+        high_stakes_model = "unsloth/Meta-Llama-3.1-70B-Instruct"
+        general_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
+    elif state.model_preset == "aiml":
+        conductor_model = "gpt-4o-mini"
+        coder_model = "gpt-4o"
+        high_stakes_model = "gpt-4o"
+        general_model = "gpt-4o-mini"
+    elif state.model_preset == "custom":
+        custom_assigns = state.model_assignments or {}
+        conductor_model = custom_assigns.get("conductor", "gpt-4o-mini")
+        coder_model = custom_assigns.get("coder", "gpt-4o-mini")
+        high_stakes_model = custom_assigns.get("high_stakes", "unsloth/Meta-Llama-3.1-8B-Instruct")
+        general_model = custom_assigns.get("general", "gpt-4o-mini")
+        
+    conductor = Agent(name=f"conductor-{unique_suffix}", role="Orchestrator", system_prompt="You are the Conductor orchestrating the debate.", model=conductor_model)
     if state.scenario == "dynamic":
         file_contents_list = []
         for filepath in state.diff_files:
@@ -1113,13 +1143,13 @@ async def run_simulation_task():
         
         coder = CoderAgent(
             name_suffix=unique_suffix,
-            model="gpt-4o-mini",
+            model=coder_model,
             scenario="dynamic",
             pr_diff=state.pr_diff,
             file_contents=file_contents_str
         )
     else:
-        coder = CoderAgent(name_suffix=unique_suffix, model="gpt-4o-mini", scenario=state.scenario)
+        coder = CoderAgent(name_suffix=unique_suffix, model=coder_model, scenario=state.scenario)
         
     if state.scenario == "dynamic":
         if jit_config and "reviewers" in jit_config:
@@ -1128,21 +1158,55 @@ async def run_simulation_task():
                 role = r_def.get("role", "Code Auditor")
                 domain = r_def.get("domain", "architecture")
                 system_prompt_override = r_def.get("system_prompt", "")
-                model = r_def.get("model", "gpt-4o-mini")
+                
+                # Determine reviewer model
+                if state.model_preset == "custom":
+                    custom_assigns = state.model_assignments or {}
+                    r_model = custom_assigns.get("high_stakes" if domain in ["auth", "database", "billing", "security"] else "general", "gpt-4o-mini")
+                elif state.model_preset == "featherless":
+                    r_model = "unsloth/Meta-Llama-3.1-70B-Instruct" if domain in ["auth", "database", "billing", "security"] else "unsloth/Meta-Llama-3.1-8B-Instruct"
+                elif state.model_preset == "aiml":
+                    r_model = "gpt-4o" if domain in ["auth", "database", "billing", "security"] else "gpt-4o-mini"
+                else: # "hybrid"
+                    r_model = r_def.get("model", "gpt-4o-mini")
+                    if domain in ["auth", "database", "billing", "security"] and r_model == "gpt-4o-mini":
+                        r_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
                 
                 r_agent = ReviewerAgent(
                     role=role,
                     name_suffix=unique_suffix,
-                    model=model,
+                    model=r_model,
                     domain=domain,
                     system_prompt_override=system_prompt_override
                 )
                 reviewers.append(r_agent)
         else:
             reviewers = generate_dynamic_reviewers(state.diff_files, unique_suffix, limit=None)
+            for r in reviewers:
+                if state.model_preset == "custom":
+                    custom_assigns = state.model_assignments or {}
+                    r.model = custom_assigns.get("high_stakes" if r.domain in ["auth", "database", "billing", "security"] else "general", "gpt-4o-mini")
+                elif state.model_preset == "featherless":
+                    r.model = "unsloth/Meta-Llama-3.1-70B-Instruct" if r.domain in ["auth", "database", "billing", "security"] else "unsloth/Meta-Llama-3.1-8B-Instruct"
+                elif state.model_preset == "aiml":
+                    r.model = "gpt-4o" if r.domain in ["auth", "database", "billing", "security"] else "gpt-4o-mini"
     else:
-        reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-8B-Instruct", domain="auth")
-        reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
+        if state.model_preset == "custom":
+            custom_assigns = state.model_assignments or {}
+            model_auth = custom_assigns.get("high_stakes", "unsloth/Meta-Llama-3.1-8B-Instruct")
+            model_cart = custom_assigns.get("general", "gpt-4o-mini")
+        elif state.model_preset == "featherless":
+            model_auth = "unsloth/Meta-Llama-3.1-70B-Instruct"
+            model_cart = "unsloth/Meta-Llama-3.1-8B-Instruct"
+        elif state.model_preset == "aiml":
+            model_auth = "gpt-4o"
+            model_cart = "gpt-4o-mini"
+        else: # "hybrid"
+            model_auth = "unsloth/Meta-Llama-3.1-8B-Instruct"
+            model_cart = "gpt-4o-mini"
+            
+        reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model=model_auth, domain="auth")
+        reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model=model_cart, domain="cart")
         reviewers = [reviewer_auth, reviewer_cart]
         
     reviewer_auth = reviewers[0] if len(reviewers) > 0 else ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-8B-Instruct", domain="auth")
@@ -1345,7 +1409,9 @@ async def get_status():
         "reviewer_cart_domain": state.reviewer_cart_domain,
         "pr_title": state.pr_title,
         "pr_branch": state.pr_branch,
-        "active_agents": state.active_agents
+        "active_agents": state.active_agents,
+        "model_preset": state.model_preset,
+        "model_assignments": state.model_assignments
     }
 
 @app.get("/api/events")
@@ -1356,6 +1422,8 @@ class StartRequest(BaseModel):
     scenario: Optional[str] = "rbac_bypass"
     repo: Optional[str] = None
     pr_number: Optional[int] = None
+    model_preset: Optional[str] = "hybrid"
+    model_assignments: Optional[Dict[str, str]] = None
 
 @app.post("/api/start")
 async def start_simulation(background_tasks: BackgroundTasks, req: StartRequest = StartRequest()):
@@ -1369,7 +1437,13 @@ async def start_simulation(background_tasks: BackgroundTasks, req: StartRequest 
         elif scenario not in SCENARIO_CONFIG:
             raise HTTPException(status_code=400, detail=f"Unknown scenario: {scenario}. Choose from: {list(SCENARIO_CONFIG.keys())}")
             
-        state.reset(scenario=scenario, repo=req.repo, pr_number=req.pr_number)
+        state.reset(
+            scenario=scenario,
+            repo=req.repo,
+            pr_number=req.pr_number,
+            model_preset=req.model_preset,
+            model_assignments=req.model_assignments
+        )
         background_tasks.add_task(run_simulation_task)
         return {"status": "started", "scenario": scenario}
 

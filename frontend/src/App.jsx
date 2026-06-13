@@ -254,7 +254,13 @@ function JITSynthesisPanel({ agents, status, isAnalyzing }) {
       <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
         {reviewerAgents.map((agent) => {
           const isLlama = agent.model?.includes("Llama");
-          const modelLabel = isLlama ? "Llama-3.1-70B via Featherless AI" : `${agent.model || "GPT-4o-mini"} via AIML API`;
+          const modelName = agent.model || "";
+          let modelLabel = "";
+          if (isLlama) {
+            modelLabel = modelName.includes("70B") ? "Llama-3.1-70B via Featherless AI" : "Llama-3.1-8B via Featherless AI";
+          } else {
+            modelLabel = modelName.includes("mini") ? "GPT-4o Mini via AIML API" : "GPT-4o via AIML API";
+          }
           const domainColor = getDomainColor(agent.domain);
 
           return (
@@ -517,11 +523,13 @@ function DebateMessage({ evt, activeAgents }) {
   const norm = normalizeName(evt.sender);
   const matchedAgent = activeAgents.find(a => normalizeName(a.name) === norm);
   const isLlama = matchedAgent?.model?.includes("Llama");
-  const modelBadge = matchedAgent?.id?.startsWith("reviewer")
-    ? (isLlama ? "Featherless: Llama-3.1-70B" : `AIML: ${matchedAgent.model || "GPT-4o-mini"}`)
-    : (matchedAgent && (matchedAgent.id === "conductor" || matchedAgent.id === "coder") && evt.role !== "SYSTEM")
-      ? `AIML: ${matchedAgent.model || "GPT-4o-mini"}`
-      : null;
+  const modelName = matchedAgent?.model || "";
+  const modelLabel = isLlama 
+    ? (modelName.includes("70B") ? "Llama-3.1-70B" : "Llama-3.1-8B") 
+    : (modelName.includes("mini") ? "GPT-4o Mini" : "GPT-4o");
+  const modelBadge = matchedAgent && evt.role !== "SYSTEM"
+    ? (isLlama ? `Featherless: ${modelLabel}` : `AIML: ${modelLabel}`)
+    : null;
 
   // Special card styles
   if (isToolCall) {
@@ -656,6 +664,57 @@ function DebateMessage({ evt, activeAgents }) {
   );
 }
 
+const getModelBadge = (modelName) => {
+  if (!modelName) return null;
+  const isLlama = modelName.includes("Llama");
+  return (
+    <span style={{
+      fontSize: "0.65rem", padding: "0.15rem 0.4rem", borderRadius: "4px",
+      background: isLlama ? "rgba(167, 139, 250, 0.15)" : "rgba(6, 182, 212, 0.15)",
+      border: isLlama ? "1px solid rgba(167, 139, 250, 0.3)" : "1px solid rgba(6, 182, 212, 0.3)",
+      color: isLlama ? "#a78bfa" : "#67e8f9",
+      fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "0.2rem",
+      whiteSpace: "nowrap"
+    }}>
+      {isLlama ? "🦙 Featherless" : "☁️ AIML API"}
+    </span>
+  );
+};
+
+function getEffectiveAssignments(preset, customAssignments) {
+  if (preset === "hybrid") {
+    return {
+      conductor: "gpt-4o-mini",
+      coder: "gpt-4o-mini",
+      high_stakes: "unsloth/Meta-Llama-3.1-8B-Instruct",
+      general: "gpt-4o-mini"
+    };
+  }
+  if (preset === "featherless") {
+    return {
+      conductor: "unsloth/Meta-Llama-3.1-8B-Instruct",
+      coder: "unsloth/Meta-Llama-3.1-8B-Instruct",
+      high_stakes: "unsloth/Meta-Llama-3.1-70B-Instruct",
+      general: "unsloth/Meta-Llama-3.1-8B-Instruct"
+    };
+  }
+  if (preset === "aiml") {
+    return {
+      conductor: "gpt-4o-mini",
+      coder: "gpt-4o",
+      high_stakes: "gpt-4o",
+      general: "gpt-4o-mini"
+    };
+  }
+  const assigns = customAssignments || {};
+  return {
+    conductor: assigns.conductor || "gpt-4o-mini",
+    coder: assigns.coder || "gpt-4o-mini",
+    high_stakes: assigns.high_stakes || "unsloth/Meta-Llama-3.1-8B-Instruct",
+    general: assigns.general || "gpt-4o-mini"
+  };
+}
+
 // ─── Main App ──────────────────────────────────────────────────────────
 function App() {
   // ── State ──
@@ -688,6 +747,15 @@ function App() {
   const [backendOnline, setBackendOnline] = useState(true);
   const [debateSummary, setDebateSummary] = useState(null);
   const [scenarioFromServer, setScenarioFromServer] = useState("dynamic");
+  const [modelPreset, setModelPreset] = useState("hybrid");
+  const [modelAssignments, setModelAssignments] = useState({
+    conductor: "gpt-4o-mini",
+    coder: "gpt-4o-mini",
+    high_stakes: "unsloth/Meta-Llama-3.1-8B-Instruct",
+    general: "gpt-4o-mini"
+  });
+  const [showMappings, setShowMappings] = useState(false);
+  const [showSwarmConfig, setShowSwarmConfig] = useState(false);
 
   const [selectedRepo, setSelectedRepo] = useState("vjb/WellActually.ai");
   const [prsList, setPrsList] = useState([]);
@@ -706,6 +774,36 @@ function App() {
   const hasAgents = reviewerAgents.length > 0;
   const activePhase = getActivePhase(status, hasAgents, !!selectedPrDetails);
   const isAnalyzing = (status === "TRIAGE" || (status === "RUNNING" && !hasAgents));
+  const effectiveAssignments = getEffectiveAssignments(modelPreset, modelAssignments);
+
+  const handlePresetChange = (preset) => {
+    setModelPreset(preset);
+    if (preset === "hybrid") {
+      setModelAssignments({
+        conductor: "gpt-4o-mini",
+        coder: "gpt-4o-mini",
+        high_stakes: "unsloth/Meta-Llama-3.1-8B-Instruct",
+        general: "gpt-4o-mini"
+      });
+    } else if (preset === "featherless") {
+      setModelAssignments({
+        conductor: "unsloth/Meta-Llama-3.1-8B-Instruct",
+        coder: "unsloth/Meta-Llama-3.1-8B-Instruct",
+        high_stakes: "unsloth/Meta-Llama-3.1-70B-Instruct",
+        general: "unsloth/Meta-Llama-3.1-8B-Instruct"
+      });
+    } else if (preset === "aiml") {
+      setModelAssignments({
+        conductor: "gpt-4o-mini",
+        coder: "gpt-4o",
+        high_stakes: "gpt-4o",
+        general: "gpt-4o-mini"
+      });
+    } else if (preset === "custom") {
+      setShowMappings(true);
+    }
+  };
+
 
   // ── API Calls ──
   const fetchPRs = async (repoName) => {
@@ -760,7 +858,9 @@ function App() {
       const payload = {
         scenario: "dynamic",
         repo: selectedRepo,
-        pr_number: selectedPrNumber ? parseInt(selectedPrNumber, 10) : null
+        pr_number: selectedPrNumber ? parseInt(selectedPrNumber, 10) : null,
+        model_preset: modelPreset,
+        model_assignments: effectiveAssignments
       };
       await fetch(`${API_BASE}/api/start`, {
         method: "POST",
@@ -825,6 +925,10 @@ function App() {
           setReviewerCartRole(d.reviewer_cart_role || "Cart SME");
           setReviewerCartDomain(d.reviewer_cart_domain || "cart");
           setActiveAgents(d.active_agents || []);
+          if (d.status !== "IDLE") {
+            if (d.model_preset) setModelPreset(d.model_preset);
+            if (d.model_assignments) setModelAssignments(d.model_assignments);
+          }
         }
         const resEvents = await fetch(`${API_BASE}/api/events`);
         if (resEvents.ok) setEvents(await resEvents.json());
@@ -1098,6 +1202,163 @@ function App() {
                 </div>
               )}
             </div>
+          </section>
+
+          {/* Swarm Model Routing Card */}
+          <section className="glass-panel fade-in" style={{ padding: "1.25rem" }}>
+            <div 
+              onClick={() => setShowSwarmConfig(!showSwarmConfig)}
+              style={{ 
+                display: "flex", 
+                alignItems: "center", 
+                gap: "0.6rem", 
+                cursor: "pointer", 
+                userSelect: "none"
+              }}
+            >
+              <span style={{ fontSize: "1.1rem" }}>🎛️</span>
+              <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#a855f7", flex: 1 }}>Swarm Model Routing</h2>
+              <span style={{
+                fontSize: "0.65rem",
+                padding: "0.15rem 0.45rem",
+                borderRadius: "4px",
+                background: "rgba(168,85,247,0.1)",
+                border: "1px solid rgba(168,85,247,0.2)",
+                color: "#c084fc",
+                fontWeight: 600,
+                marginRight: "0.2rem"
+              }}>
+                {modelPreset === "hybrid" ? "Hybrid Swarm" :
+                 modelPreset === "featherless" ? "Featherless AI (OS)" :
+                 modelPreset === "aiml" ? "AIML API (Comm)" : "Custom Routing"}
+              </span>
+              <span style={{ fontSize: "0.75rem", color: "#a855f7", transition: "transform 0.2s ease" }}>
+                {showSwarmConfig ? "▲" : "▼"}
+              </span>
+            </div>
+
+            {showSwarmConfig && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.8rem", marginTop: "1rem" }}>
+                {/* Presets Toggle */}
+                <div>
+                  <label style={{ display: "block", fontSize: "0.68rem", color: "#6b7280", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
+                    Model Preset
+                  </label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem" }}>
+                    {[
+                      { id: "hybrid", label: "Hybrid Swarm" },
+                      { id: "featherless", label: "Featherless AI (OS)" },
+                      { id: "aiml", label: "AIML API (Comm)" },
+                      { id: "custom", label: "Custom Routing" }
+                    ].map((p) => {
+                      const isActive = modelPreset === p.id;
+                      const disabled = status !== "IDLE";
+                      return (
+                        <button
+                          key={p.id}
+                          disabled={disabled}
+                          onClick={() => handlePresetChange(p.id)}
+                          style={{
+                            padding: "0.45rem 0.5rem",
+                            borderRadius: "6px",
+                            fontSize: "0.75rem",
+                            fontWeight: isActive ? 600 : 500,
+                            cursor: disabled ? "not-allowed" : "pointer",
+                            transition: "all 0.2s ease",
+                            background: isActive 
+                              ? "rgba(168,85,247,0.15)" 
+                              : "rgba(255,255,255,0.02)",
+                            border: isActive 
+                              ? "1px solid rgba(168,85,247,0.4)" 
+                              : "1px solid rgba(255,255,255,0.08)",
+                            color: isActive ? "#c084fc" : "#9ca3af",
+                            opacity: disabled && !isActive ? 0.5 : 1
+                          }}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Accordion Toggle */}
+                <div 
+                  onClick={() => setShowMappings(!showMappings)}
+                  style={{ 
+                    display: "flex", 
+                    justifyContent: "space-between", 
+                    alignItems: "center", 
+                    cursor: "pointer", 
+                    padding: "0.5rem 0.6rem", 
+                    borderRadius: "6px",
+                    background: "rgba(255,255,255,0.02)",
+                    border: "1px solid rgba(255,255,255,0.06)",
+                    color: "#9ca3af",
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    userSelect: "none",
+                    transition: "all 0.2s ease",
+                    marginTop: "0.2rem"
+                  }}
+                >
+                  <span>{showMappings ? "⚙️ Hide Swarm Mappings" : "⚙️ View Swarm Mappings"}</span>
+                  <span style={{ fontSize: "0.6rem" }}>{showMappings ? "▲" : "▼"}</span>
+                </div>
+
+                {showMappings && (
+                  <>
+                    {/* Mappings */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", background: "rgba(0,0,0,0.15)", padding: "0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.03)" }}>
+                      {[
+                        { key: "conductor", label: "Conductor (Orchestration)", desc: "Orchestrates Swarm Analysis & Debate" },
+                        { key: "coder", label: "Coder (Implementation)", desc: "Implements fixes to resolve reviewer concerns" },
+                        { key: "high_stakes", label: "High-Stakes SME (Auth/DB)", desc: "Routes reviewers in Auth, DB, Security & Billing" },
+                        { key: "general", label: "General SME (QA/Docs)", desc: "Routes reviewers in QA, Docs, API & general code" }
+                      ].map((role) => (
+                        <div key={role.key} style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                          <div style={{ display: "flex", flexDirection: "column" }}>
+                            <span style={{ fontSize: "0.72rem", color: "#e5e7eb", fontWeight: 600 }}>{role.label}</span>
+                            <span style={{ fontSize: "0.58rem", color: "#9ca3af", fontStyle: "italic", marginBottom: "0.1rem" }}>{role.desc}</span>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                            <select
+                              value={effectiveAssignments[role.key] || "gpt-4o-mini"}
+                              disabled={modelPreset !== "custom" || status !== "IDLE"}
+                              onChange={(e) => {
+                                setModelAssignments(prev => ({ ...prev, [role.key]: e.target.value }));
+                              }}
+                              style={{
+                                flex: 1,
+                                padding: "0.35rem 0.5rem",
+                                borderRadius: "6px",
+                                border: "1px solid rgba(255,255,255,0.1)",
+                                background: modelPreset === "custom" && status === "IDLE" ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.03)",
+                                color: modelPreset === "custom" && status === "IDLE" ? "white" : "#9ca3af",
+                                fontSize: "0.78rem",
+                                cursor: modelPreset === "custom" && status === "IDLE" ? "pointer" : "default"
+                              }}
+                            >
+                              <option value="gpt-4o-mini">GPT-4o Mini</option>
+                              <option value="gpt-4o">GPT-4o</option>
+                              <option value="unsloth/Meta-Llama-3.1-8B-Instruct">Llama 3.1 8B</option>
+                              <option value="unsloth/Meta-Llama-3.1-70B-Instruct">Llama 3.1 70B</option>
+                            </select>
+                            {getModelBadge(effectiveAssignments[role.key])}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {modelPreset !== "custom" && (
+                      <div style={{ fontSize: "0.65rem", color: "#6b7280", fontStyle: "italic", textAlign: "center" }}>
+                        ℹ️ Selected preset defines routing. Select "Custom Routing" to modify.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </section>
 
           {/* Phase 2: JIT SYNTHESIS — The Hero */}

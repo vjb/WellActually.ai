@@ -347,6 +347,12 @@ input:focus-visible {
   background: rgba(255, 255, 255, 0.15);
 }
 
+/* ─── Verdict Stat Cards ─── */
+.verdict-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
 /* ─── Responsive ─── */
 @media (max-width: 1200px) {
   .pipeline-bar {

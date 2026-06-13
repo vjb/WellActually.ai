@@ -114,6 +114,86 @@ def format_scorecard_comment(state) -> str:
     return body
 
 
+# ── Bug 1 fix: contextual JIRA event based on PR title/files ──────────
+def generate_jira_context(pr_title: str, diff_files: List[str]) -> str:
+    """Generate a contextual JIRA ticket reference based on the PR's domain."""
+    title_lower = (pr_title or "").lower()
+    files_str = " ".join(f.lower() for f in diff_files)
+    combined = f"{title_lower} {files_str}"
+
+    if "billing" in combined or "spending" in combined:
+        return 'SEC-842: "Implement spending report fetcher. MUST use standard rbac.check_access() middleware."'
+    elif "auth" in combined or "oauth" in combined or "token" in combined or "login" in combined or "session" in combined:
+        return 'SEC-901: "Harden OAuth2 token lifecycle. Tokens MUST be hashed before storage; revoke requires ownership check."'
+    elif "checkout" in combined or "cart" in combined:
+        return 'CART-315: "Refactor checkout flow. cart_id MUST be validated against OpenAPI contract before payment dispatch."'
+    elif "gdpr" in combined or "export" in combined or "user_data" in combined or "user_queries" in combined or "permissions" in combined:
+        return 'PRIV-208: "GDPR data export endpoint. Ownership MUST be verified; PII columns MUST be filtered from export payload."'
+    elif "admin" in combined or "metrics" in combined or "dashboard" in combined:
+        return 'OPS-417: "Admin metrics dashboard. Queries MUST use LIMIT clauses; PII MUST NOT leak in aggregation responses."'
+    else:
+        return f'ENG-100: "Review changes in {diff_files[0] if diff_files else "unknown"}. Ensure compliance with project standards."'
+
+
+# ── Bug 2 fix: contextual watchdog anomaly based on PR domain ─────────
+def generate_watchdog_anomalies(diff_files: List[str]) -> List[Dict[str, Any]]:
+    """Generate domain-aware watchdog anomaly messages instead of hardcoded billing ones."""
+    files_str = " ".join(f.lower() for f in diff_files)
+
+    anomalies: List[Dict[str, Any]] = []
+    if "billing" in files_str or "spending" in files_str:
+        anomalies.append({
+            "timestamp": "2026-06-12T11:03:00.000Z",
+            "service": "billing-service",
+            "level": "WARNING",
+            "message": "Elevated query rate on billing_profiles: 847 SELECT queries in 60s from spending-report-worker. Possible missing query cache or unbounded loop.",
+            "trace_id": "trace-billing-9f2e"
+        })
+    if "auth" in files_str or "login" in files_str or "session" in files_str or "token" in files_str or "oauth" in files_str:
+        anomalies.append({
+            "timestamp": "2026-06-12T11:05:22.000Z",
+            "service": "auth-service",
+            "level": "WARNING",
+            "message": "Spike in token refresh calls from auth-session-worker: 312 refresh_token INSERTs in 30s. Possible token replay or missing dedup.",
+            "trace_id": "trace-auth-4a1c"
+        })
+    if "gdpr" in files_str or "export" in files_str or "user_data" in files_str or "user_queries" in files_str or "permissions" in files_str:
+        anomalies.append({
+            "timestamp": "2026-06-12T11:08:45.000Z",
+            "service": "user-data-service",
+            "level": "WARNING",
+            "message": "Unmasked PII detected in data-export response payload: fields [email, ssn_last4, phone] returned without redaction filter.",
+            "trace_id": "trace-userdata-7b3f"
+        })
+    if "admin" in files_str or "metrics" in files_str or "dashboard" in files_str:
+        anomalies.append({
+            "timestamp": "2026-06-12T11:10:12.000Z",
+            "service": "admin-service",
+            "level": "WARNING",
+            "message": "Unbounded SELECT * on orders table from admin-metrics-worker: query returned 2.3M rows without LIMIT. Possible OOM risk.",
+            "trace_id": "trace-admin-c82d"
+        })
+    if "cart" in files_str or "checkout" in files_str:
+        anomalies.append({
+            "timestamp": "2026-06-12T11:07:33.000Z",
+            "service": "checkout-service",
+            "level": "WARNING",
+            "message": "Payment gateway calls missing idempotency key: 47 duplicate charges detected in 5min window from checkout-handler.",
+            "trace_id": "trace-checkout-e91a"
+        })
+
+    # Fallback: use static log file anomalies if nothing matched
+    if not anomalies:
+        anomalies.append({
+            "timestamp": "2026-06-12T11:03:00.000Z",
+            "service": "unknown-service",
+            "level": "WARNING",
+            "message": f"Anomalous activity detected in service handling {diff_files[0] if diff_files else 'unknown'}. Investigate recent changes.",
+            "trace_id": "trace-generic-0000"
+        })
+    return anomalies
+
+
 # Scenario configuration — single layered scenario for demo
 SCENARIO_CONFIG = {
     "rbac_bypass": {
@@ -302,9 +382,78 @@ def predict_reviewer_identities(diff_files: List[str]) -> Tuple[Dict[str, str], 
 
     return a1, a2
 
+# ── Bug 3 fix: unique system prompts per reviewer ────────────────────
+# Domain-specific system prompt templates so each reviewer gets a distinct persona
+REVIEWER_SYSTEM_PROMPTS = {
+    "billing": (
+        "You are the Billing & Financial SME. Your primary concern is financial data integrity. "
+        "Audit all SQL queries touching billing_profiles, spending_limit_usd, and discount columns. "
+        "Verify that RBAC middleware (rbac.check_access) guards every financial data access path. "
+        "Flag any direct SELECT on sensitive monetary columns without access control."
+    ),
+    "auth": (
+        "You are the Auth & Security SME. Your primary concern is authentication and authorization integrity. "
+        "Audit token storage (must be hashed, never plaintext), session lifecycle (revocation must verify ownership), "
+        "and RBAC policy enforcement. Flag hardcoded secrets, missing ownership checks, and client-side role guards."
+    ),
+    "database": (
+        "You are the Database Schema Compliance SME. Your primary concern is schema correctness. "
+        "Cross-reference every SQL column in INSERT/SELECT/UPDATE against the Postgres schema. "
+        "Flag non-existent columns, SELECT * anti-patterns, and missing LIMIT on unbounded queries."
+    ),
+    "security": (
+        "You are the Environment Configuration Security SME. Your primary concern is secrets management. "
+        "Audit for hardcoded API keys, plaintext credentials, .env exposure, and missing encryption at rest."
+    ),
+    "cart": (
+        "You are the Cart & Order Integration SME. Your primary concern is API contract compliance. "
+        "Verify that all /api/v1/checkout calls match the OpenAPI contract schema. "
+        "Flag missing required fields (cart_id), payload mismatches, and missing idempotency keys."
+    ),
+    "api": (
+        "You are the API Contract & Integration SME. Your primary concern is REST endpoint correctness. "
+        "Verify endpoint paths, request/response schemas, and HTTP status codes match the OpenAPI contract. "
+        "Flag internal error details leaked to clients and missing input validation."
+    ),
+    "qa": (
+        "You are the QA & Test Verification SME. Your primary concern is test coverage and correctness. "
+        "Verify that test cases cover edge cases, error paths, and security boundaries. "
+        "Flag missing assertions, untested branches, and tests that pass trivially."
+    ),
+    "documentation": (
+        "You are the Documentation & Standards SME. Your primary concern is documentation accuracy. "
+        "Verify that docstrings, README, and inline comments accurately reflect the current code behavior. "
+        "Flag stale documentation that contradicts the implementation."
+    ),
+    "architecture": (
+        "You are the Code Architecture SME. Your primary concern is structural quality and maintainability. "
+        "Audit for separation of concerns, proper error handling, and adherence to project conventions. "
+        "Flag god functions, missing abstractions, and circular dependencies."
+    ),
+    "workflow": (
+        "You are the VCS Workflow Compliance SME. Your primary concern is version control best practices. "
+        "Verify branch naming, commit message conventions, and PR size guidelines. "
+        "Flag oversized PRs, merge conflicts, and missing changelog entries."
+    ),
+}
+
+
+def _get_reviewer_system_prompt(domain: str, role: str) -> str:
+    """Return a unique, domain-specific system prompt for a reviewer agent."""
+    base = REVIEWER_SYSTEM_PROMPTS.get(domain, "")
+    if base:
+        return base
+    # Fallback: generate a unique prompt from role/domain so it's never empty
+    return (
+        f"You are the {role}. Focus on verifying compliance for the {domain} domain. "
+        f"Make sure changes follow standard project policies and flag any violations specific to {domain}."
+    )
+
+
 def generate_dynamic_reviewers(diff_files: List[str], unique_suffix: str, limit: Optional[int] = 2) -> List[Any]:
     """
     Dynamically generates reviewer agent identities based on the files touched in the PR.
+    Each reviewer receives a unique system_prompt reflecting their domain expertise.
     """
     from src.swarm import ReviewerAgent
     
@@ -332,15 +481,18 @@ def generate_dynamic_reviewers(diff_files: List[str], unique_suffix: str, limit:
                     reviewers_info.append({"domain": "architecture", "role": "Code Architecture SME"})
                 
     reviewers = []
-    models = ["unsloth/Meta-Llama-3.1-70B-Instruct", "gpt-4o-mini", "unsloth/Meta-Llama-3.1-70B-Instruct"]
+    models = ["unsloth/Meta-Llama-3.1-8B-Instruct", "gpt-4o-mini", "unsloth/Meta-Llama-3.1-8B-Instruct"]
     
     for idx, info in enumerate(reviewers_info):
         model = models[idx % len(models)]
+        # Bug 3 fix: pass a unique system_prompt_override per reviewer
+        prompt = _get_reviewer_system_prompt(info["domain"], info["role"])
         reviewers.append(ReviewerAgent(
             role=info["role"],
             name_suffix=unique_suffix,
             model=model,
-            domain=info["domain"]
+            domain=info["domain"],
+            system_prompt_override=prompt
         ))
     return reviewers
 
@@ -348,68 +500,125 @@ def generate_dynamic_reviewers(diff_files: List[str], unique_suffix: str, limit:
 def detect_mcp_targets(diff_files: List[str], file_contents: Dict[str, str]) -> Dict[str, str]:
     """
     Scans PR file contents and paths to dynamically identify schema_table,
-    api_endpoint, and rbac_target if they exist. Falls back to None if not found.
+    api_endpoint, and rbac_target ONLY when relevant code patterns are present.
+    Bug 4 fix: only populate each target if the diff actually touches that domain.
     """
     import re
     
-    # Default: None detected
+    # Determine which domains the diff files touch based on path patterns
+    files_str = " ".join(f.lower() for f in diff_files)
+    touches_database = any(
+        "src/database/" in f.lower() or f.lower().endswith(".sql") or "schema" in f.lower()
+        for f in diff_files
+    )
+    touches_api = any(
+        "src/api/" in f.lower() or "handler" in f.lower() or "endpoint" in f.lower()
+        for f in diff_files
+    )
+    touches_auth = any(
+        "auth" in f.lower() or "permission" in f.lower() or "rbac" in f.lower()
+        or "login" in f.lower() or "session" in f.lower()
+        for f in diff_files
+    )
+    
+    # Also scan file contents for SQL, API, and sensitive column references
+    has_sql_in_content = False
+    has_api_in_content = False
+    has_sensitive_columns = False
+    
+    sensitive_columns = ["spending_limit_usd", "discount_applied", "ssn_last4",
+                         "password_hash", "refresh_token", "internal_notes"]
+    
+    for content in file_contents.values():
+        content_upper = content.upper()
+        if "SELECT" in content_upper or "INSERT INTO" in content_upper or "UPDATE" in content_upper or "DELETE" in content_upper:
+            has_sql_in_content = True
+        if re.search(r'[\'"]/api/v[0-9]/[^\'"]+[\'"]', content):
+            has_api_in_content = True
+        for col in sensitive_columns:
+            if col in content:
+                has_sensitive_columns = True
+                break
+    
+    # Only activate each MCP target if the diff touches the relevant domain
     schema_table = None
     api_endpoint = None
     rbac_target = None
     
-    # 1. Search for table names in SQL queries in file contents
-    known_tables = ["billing_profiles", "cart_items", "users", "products", "transaction_audit_logs"]
-    for content in file_contents.values():
-        content_upper = content.upper()
-        if "SELECT" in content_upper or "INSERT INTO" in content_upper or "UPDATE" in content_upper:
-            for table in known_tables:
-                if re.search(r'\b' + re.escape(table) + r'\b', content, re.IGNORECASE):
-                    schema_table = table
+    # 1. Schema table — only if diff touches database code or content has SQL
+    if touches_database or has_sql_in_content:
+        known_tables = ["billing_profiles", "cart_items", "users", "products",
+                        "orders", "user_sessions", "transaction_audit_logs"]
+        for content in file_contents.values():
+            content_upper = content.upper()
+            if "SELECT" in content_upper or "INSERT INTO" in content_upper or "UPDATE" in content_upper:
+                for table in known_tables:
+                    if re.search(r'\b' + re.escape(table) + r'\b', content, re.IGNORECASE):
+                        schema_table = table
+                        break
+            if schema_table:
+                break
+        # Fallback: infer from file paths if no content match
+        if not schema_table:
+            if "billing" in files_str or "spending" in files_str:
+                schema_table = "billing_profiles"
+            elif "cart" in files_str or "checkout" in files_str:
+                schema_table = "cart_items"
+            elif "user" in files_str:
+                schema_table = "users"
+    
+    # 2. API endpoint — only if diff touches API code or content has API calls
+    if touches_api or has_api_in_content:
+        for content in file_contents.values():
+            match = re.search(r'[\'"]/api/v[0-9]/[^\'"]+[\'"]', content)
+            if match:
+                api_endpoint = match.group(0).strip("'\"")
+                break
+        # Fallback: infer from file paths
+        if not api_endpoint:
+            for f in diff_files:
+                f_lower = f.lower()
+                if "billing" in f_lower:
+                    api_endpoint = "/api/v1/billing/spending"
                     break
-        if schema_table:
-            break
-            
-    # 2. Search for API endpoints in the file paths or code
-    for content in file_contents.values():
-        match = re.search(r'[\'"]/api/v1/[^\'"]+[\'"]', content)
-        if match:
-            api_endpoint = match.group(0).strip("'\"")
-            break
-            
-    # If not found in content, inspect filepath keywords
-    if not api_endpoint:
-        for f in diff_files:
-            if "billing" in f.lower():
-                api_endpoint = "/api/v1/billing/spending"
-                break
-            elif "cart" in f.lower() or "checkout" in f.lower():
-                api_endpoint = "/api/v1/checkout"
-                break
-                
-    # If still not found, fallback based on detected schema table
-    if not api_endpoint:
-        if schema_table == "billing_profiles":
-            api_endpoint = "/api/v1/billing/spending"
-        elif schema_table == "cart_items":
-            api_endpoint = "/api/v1/checkout"
-                
-    # 3. Search for sensitive columns/RBAC targets
-    known_columns = {
-        "billing_profiles": "spending_limit_usd",
-        "cart_items": "discount_applied"
-    }
-    if schema_table in known_columns:
-        rbac_target = f"{schema_table}.{known_columns[schema_table]}"
-    else:
-        # Check if code references any known columns
-        for table, col in known_columns.items():
-            for content in file_contents.values():
-                if col in content:
-                    schema_table = table
-                    rbac_target = f"{table}.{col}"
+                elif "cart" in f_lower or "checkout" in f_lower:
+                    api_endpoint = "/api/v1/checkout"
                     break
-            if rbac_target:
-                break
+                elif "user" in f_lower and ("export" in f_lower or "api" in f_lower):
+                    api_endpoint = "/api/v1/users/export"
+                    break
+
+    # Secondary inference: if SQL content revealed a domain table, infer its API
+    if not api_endpoint and schema_table:
+        table_api_map = {
+            "billing_profiles": "/api/v1/billing/spending",
+            "cart_items": "/api/v1/checkout",
+            "users": "/api/v1/users",
+        }
+        if schema_table in table_api_map:
+            api_endpoint = table_api_map[schema_table]
+    
+    # 3. RBAC target — only if diff touches auth/permissions OR content has sensitive columns
+    if touches_auth or has_sensitive_columns:
+        known_columns = {
+            "billing_profiles": "spending_limit_usd",
+            "cart_items": "discount_applied",
+            "users": "ssn_last4",
+        }
+        if schema_table in known_columns:
+            rbac_target = f"{schema_table}.{known_columns[schema_table]}"
+        else:
+            for table, col in known_columns.items():
+                for content in file_contents.values():
+                    if col in content:
+                        rbac_target = f"{table}.{col}"
+                        break
+                if rbac_target:
+                    break
+        # If still no rbac_target but we know auth is touched, use a generic one
+        if not rbac_target and touches_auth:
+            if schema_table:
+                rbac_target = f"{schema_table}.role"
                 
     return {
         "schema_table": schema_table or "No database tables detected",
@@ -510,10 +719,11 @@ class SwarmState:
         if repo and pr_number:
             self.pr_id = f"PR-{pr_number}"
             self.diff_files = []
+            # Bug 4 fix: defer MCP target detection until PR files are loaded
             self.mcp_targets = {
-                "schema_table": "billing_profiles" if pr_number == 217 else "cart_items",
-                "api_endpoint": "/api/v1/billing/spending" if pr_number == 217 else "/api/v1/checkout",
-                "rbac_target": "billing_profiles.spending_limit_usd" if pr_number == 217 else "cart_items.discount_applied",
+                "schema_table": "No database tables detected",
+                "api_endpoint": "No API routes detected",
+                "rbac_target": "No sensitive columns detected",
             }
         else:
             cfg = SCENARIO_CONFIG.get(scenario, SCENARIO_CONFIG["rbac_bypass"])
@@ -587,12 +797,12 @@ async def analyze_pr_for_swarm(pr_diff: str, pr_title: str, diff_files: List[str
         while len(pred_list) < 2:
             pred_list.append({"domain": "architecture", "role": "Code Architecture SME"})
             
-    models = ["unsloth/Meta-Llama-3.1-70B-Instruct", "gpt-4o-mini"]
+    models = ["unsloth/Meta-Llama-3.1-8B-Instruct", "gpt-4o-mini"]
     for idx, info in enumerate(pred_list):
         fallback_reviewers.append({
             "role": info["role"],
             "domain": info["domain"],
-            "system_prompt": f"You are the {info['role']}. Focus on verifying compliance for the {info['domain']} domain. Make sure changes follow standard project policies.",
+            "system_prompt": _get_reviewer_system_prompt(info["domain"], info["role"]),
             "model": models[idx % len(models)]
         })
         
@@ -682,10 +892,9 @@ async def run_simulation_task():
     def is_stale():
         return state.generation != task_generation
     
-    state.add_event(f"Pull Request {state.pr_id} received.", level="info")
     
     if state.repo and state.pr_number:
-        state.add_event(f"Fetching GitHub PR #{state.pr_number} from {state.repo}...", level="info")
+        state.add_event(f"Fetching PR #{state.pr_number} from {state.repo}...", level="info")
         try:
             pr_data = await get_github_pr_details_internal(state.repo, state.pr_number)
             state.diff_files = pr_data["diff_files"]
@@ -700,7 +909,7 @@ async def run_simulation_task():
                 loaded_files[filepath] = file_content
             state.loaded_file_contents = loaded_files
             
-            state.add_event(f"Successfully loaded PR #{state.pr_number}: {pr_data['title']}", level="info")
+            state.add_event(f"✓ Loaded PR #{state.pr_number}: {pr_data['title']} ({len(state.diff_files)} files)", level="info")
         except Exception as e:
             logger.error(f"Error loading PR details: {e}")
             state.add_event(f"Error loading PR details: {e}", level="error")
@@ -742,15 +951,24 @@ async def run_simulation_task():
         state.save_state()
         
     state.add_event("Modified files: " + str(state.diff_files), level="info")
-    state.add_event('[JIRA INTEGRATION] Fetched context for Ticket SEC-842: "Implement spending report fetcher. MUST use standard rbac.check_access() middleware."', level="info")
+
+    # Bug 5: delay after PR loaded
+    await asyncio.sleep(0.5)
+
+    # Bug 1 fix: contextual JIRA event based on PR domain
+    jira_ctx = generate_jira_context(state.pr_title or "", state.diff_files)
+    state.add_event(f'[JIRA INTEGRATION] Fetched context for Ticket {jira_ctx}', level="info")
     
+    # Bug 5: delay after JIRA integration
+    await asyncio.sleep(0.4)
+
     scenario_desc = SCENARIO_CONFIG.get(state.scenario, {}).get("description", "Dynamic PR review loaded from GitHub")
     state.add_event(f"Scenario: {scenario_desc}", level="info")
     
     # 1. Triage compliance
     state.status = "TRIAGE"
     state.add_event("Running compliance triage scanner...", level="info")
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(0.4)
     
     session = SwarmSession(
         pr_id=state.pr_id,
@@ -764,24 +982,38 @@ async def run_simulation_task():
     triage_res = session.run_triage()
     state.triage_result = triage_res
     state.save_state()
+
+    # Bug 5: delay after triage scan
+    await asyncio.sleep(0.4)
     
     if triage_res["status"] == "PENDING_HUMAN_APPROVAL":
-        state.add_event("❌ Zero-Trust Check FAILED: High-stakes paths matched. Automatic merge halted.", sender="TriageScanner", level="warning")
-        state.add_event("✓ Zero-Trust exception AUTO-APPROVED. Proceeding with swarm review.", level="info")
+        state.add_event("⚠️ Zero-Trust: High-stakes paths detected. Flagged for review.", sender="TriageScanner", level="warning")
         state.save_state()
+
+    # Bug 5: delay after Zero-Trust gate
+    await asyncio.sleep(0.5)
         
     # 2. Run MCP & Telemetry Static Checks to populate dashboard early
+    # Bug 2 fix: generate contextual watchdog anomalies based on PR domain
     state.add_event("Scanning log stream for active anomalies...", sender="WatchdogDaemon", level="info")
-    anomalies = session.run_watchdog_scan()
+    anomalies = generate_watchdog_anomalies(state.diff_files)
     state.watchdog_logs = anomalies
     for a in anomalies:
         state.add_event(f"Anomaly detected in {a['service']}: {a['message']}", sender="TelemetryScanner", level="warning")
     state.save_state()
+
+    # Bug 4 fix: recompute MCP targets now that diff_files are loaded
+    if state.scenario == "dynamic" and state.repo and state.pr_number:
+        fresh_mcp = detect_mcp_targets(state.diff_files, state.loaded_file_contents)
+        # Only override if we haven't already merged from JIT analysis above
+        if state.mcp_targets and all("No " in str(v) or v is None for v in state.mcp_targets.values()):
+            state.mcp_targets = fresh_mcp
+            state.save_state()
         
     # 3. Setup agents and run debate
     state.status = "RUNNING"
     state.add_event("Initializing Band.ai remote agent credentials...", level="info")
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(0.4)
     
     unique_suffix = session.unique_suffix
     conductor = Agent(name=f"conductor-{unique_suffix}", role="Orchestrator", system_prompt="You are the Conductor orchestrating the debate.")
@@ -827,11 +1059,11 @@ async def run_simulation_task():
             for r in reviewers:
                 state.add_event(f"SYSTEM: Created agent '{r.role}' to verify compliance for files in domain '{r.domain}'.")
     else:
-        reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-70B-Instruct", domain="auth")
+        reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-8B-Instruct", domain="auth")
         reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
         reviewers = [reviewer_auth, reviewer_cart]
         
-    reviewer_auth = reviewers[0] if len(reviewers) > 0 else ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-70B-Instruct", domain="auth")
+    reviewer_auth = reviewers[0] if len(reviewers) > 0 else ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-8B-Instruct", domain="auth")
     reviewer_cart = reviewers[1] if len(reviewers) > 1 else ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
     
     state.reviewer_auth_role = reviewer_auth.role
@@ -880,8 +1112,10 @@ async def run_simulation_task():
         MAX_ROUNDS = 2
         for round_num in range(1, MAX_ROUNDS + 1):
             state.consensus_round = round_num
+            # Bug 5: delay before each debate round
+            await asyncio.sleep(0.5)
             state.add_event(f"Starting Adversarial Debate Round {round_num}...", level="info")
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.4)
             
             # Execute round
             round_res = await session.run_debate_round(conductor, coder, reviewers)
@@ -889,20 +1123,12 @@ async def run_simulation_task():
             # Extract proposed code
             state.current_code = round_res["coder_response"]
             
-            # Run compliance verification for visual feedback
-            state.add_event("🔌 [postgres-mcp-server] call_tool('query', {'sql': 'SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = \\'public\\';'}) dispatched.", sender="SYSTEM", role="SYSTEM", level="info")
+            # Run compliance verification silently (no fake MCP events in feed)
             state.schema_check = await asyncio.to_thread(verify_schema_compliance, state.current_code, session.schema_path)
-            state.add_event(f"🔌 [postgres-mcp-server] call_tool returned: {json.dumps(state.schema_check.get('checked_columns', []))} | Result: {'COMPLIANT' if state.schema_check.get('compliant') else 'FAILED'}", sender="SYSTEM", role="SYSTEM", level="info")
-
-            state.add_event("🔌 [openapi-mcp-server] call_tool('check_endpoints', {'code': '...'}) dispatched.", sender="SYSTEM", role="SYSTEM", level="info")
             state.openapi_check = verify_openapi_compliance(state.current_code, session.openapi_path)
-            state.add_event(f"🔌 [openapi-mcp-server] call_tool returned: {json.dumps(state.openapi_check.get('violations', []))} | Result: {'COMPLIANT' if state.openapi_check.get('compliant') else 'FAILED'}", sender="SYSTEM", role="SYSTEM", level="info")
-
-            state.add_event("🔌 [rbac-mcp-server] call_tool('verify_access_policies', {'code': '...'}) dispatched.", sender="SYSTEM", role="SYSTEM", level="info")
             state.rbac_check = verify_rbac_compliance(state.current_code)
-            state.add_event(f"🔌 [rbac-mcp-server] call_tool returned: {json.dumps(state.rbac_check.get('violations', []))} | Result: {'COMPLIANT' if state.rbac_check.get('compliant') else 'FAILED'}", sender="SYSTEM", role="SYSTEM", level="info")
             
-            # Preserve Round 1 checks as the "initial scan" for the MCP panel story
+            # Preserve Round 1 checks as initial scan
             if round_num == 1:
                 state.initial_schema_check = state.schema_check
                 state.initial_openapi_check = state.openapi_check
@@ -1533,9 +1759,14 @@ async def get_github_prs(repo: str):
             return JSONResponse(content=prs, headers={"X-GitHub-Fallback": "true"})
         return prs
     except Exception as e:
-        logger.warning(f"GitHub API unreachable for repo {repo}: {e}. Using mock PR catalog.")
-        prs = get_mock_pr_list()
-        return JSONResponse(content=prs, headers={"X-GitHub-Fallback": "true"})
+        if repo.lower() == "vjb/wellactually.ai":
+            logger.warning(f"GitHub API unreachable for repo {repo}: {e}. Using mock PR catalog.")
+            prs = get_mock_pr_list()
+            return JSONResponse(content=prs, headers={"X-GitHub-Fallback": "true"})
+        else:
+            logger.error(f"GitHub API unreachable for repo {repo}: {e}")
+            from fastapi import HTTPException
+            raise HTTPException(status_code=502, detail=f"GitHub API Error: {str(e)}")
 
 
 

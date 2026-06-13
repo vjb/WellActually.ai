@@ -86,7 +86,7 @@ class Agent:
         import asyncio
 
         # Determine the client and model to route to
-        is_featherless = self.model.startswith("unsloth/") or "llama" in self.model.lower()
+        is_featherless = self.model.startswith("unsloth/")
         active_client = featherless_client if (is_featherless and featherless_client) else client
         active_model = self.model
 
@@ -110,45 +110,51 @@ class Agent:
                 "content": f"[{sender_info}]: {content_clean}"
             })
 
-        async def make_call(target_client, target_model):
+        async def make_call(target_client, target_model, timeout_val=15.0):
             response = await asyncio.to_thread(
                 target_client.chat.completions.create,
                 model=target_model,
                 messages=api_messages,
                 max_tokens=Agent.DEFAULT_MAX_TOKENS,
                 temperature=Agent.DEFAULT_TEMPERATURE,
-                timeout=15.0  # Explicit timeout
+                timeout=timeout_val
             )
             return response.choices[0].message.content.strip()
 
-        # Resilient custom retry loop with exponential backoff and provider fallback
+        # If Featherless, run with shorter timeout and fallback immediately (no retries) to avoid cold-start stalls
+        if is_featherless:
+            try:
+                return await make_call(active_client, active_model, timeout_val=10.0)
+            except Exception as primary_err:
+                logger.warning(
+                    f"Featherless primary model query failed/timed out for agent {self.name}: {primary_err}"
+                )
+                if client:
+                    logger.warning(f"Attempting immediate fallback to AIML API (gpt-4o-mini) for agent {self.name}...")
+                    try:
+                        return await make_call(client, "gpt-4o-mini", timeout_val=15.0)
+                    except Exception as fallback_err:
+                        logger.error(f"Immediate fallback query to AIML API also failed: {fallback_err}")
+                        raise fallback_err
+                else:
+                    raise primary_err
+
+        # Resilient custom retry loop with exponential backoff for non-Featherless
         max_retries = 3
         delay = 1.0
         backoff_factor = 2.0
 
         for attempt in range(max_retries + 1):
             try:
-                # Try the primary client/model
-                return await make_call(active_client, active_model)
+                return await make_call(active_client, active_model, timeout_val=15.0)
             except Exception as primary_err:
                 logger.warning(
                     f"Primary model query failed for agent {self.name} on attempt {attempt + 1}/{max_retries + 1}: {primary_err}"
                 )
-                
-                # Check if we should fallback from Featherless to AIML API
-                if is_featherless and (featherless_client is None or active_client == featherless_client) and client:
-                    logger.warning(f"Attempting fallback to AIML API for agent {self.name}...")
-                    fallback_model = "gpt-4o-mini"
-                    try:
-                        return await make_call(client, fallback_model)
-                    except Exception as fallback_err:
-                        logger.error(f"Fallback query to AIML API also failed: {fallback_err}")
-                
                 if attempt == max_retries:
                     logger.error(f"Agent {self.name} query completely failed after all retries.")
                     raise primary_err
                 
-                # Exponential backoff with jitter
                 sleep_time = delay * (0.5 + random.random())
                 await asyncio.sleep(sleep_time)
                 delay *= backoff_factor
@@ -248,22 +254,19 @@ class ReviewerAgent(Agent):
 
     def __init__(self, role: str, name_suffix: str = "", model: str = "gpt-4o-mini", domain: str = "auth", system_prompt_override: Optional[str] = None):
         name = f"reviewer-{role.replace(' ', '_').replace('&', 'and').lower()}-{name_suffix}" if name_suffix else f"reviewer-{role.replace(' ', '_').replace('&', 'and').lower()}"
-        if system_prompt_override:
-            system_prompt = system_prompt_override
-        else:
-            domain_ctx = self.DOMAIN_CONTEXT.get(domain, "")
-            system_prompt = (
-                f"You are the {role} Agent. "
-                "Your job is to act as a strict codebase validator and SME.\n"
-                "Guidelines:\n"
-                "1. You review proposals submitted by the Lead Coder.\n"
-                "2. Your review must be dynamic and based on the provided MCP compliance logs (PostgreSQL schema and OpenAPI contract check logs).\n"
-                "3. If there are violations in the compliance checks, you MUST reject the code. "
-                "You MUST output '❌ REVIEW FAILED:' at the very start of your message and detail the specific violations.\n"
-                "4. If and only if there are zero compliance violations in your domain, output '✓ REVIEW PASSED:' "
-                "at the start of your message.\n"
-                f"5. {domain_ctx}"
-            )
+        domain_ctx = self.DOMAIN_CONTEXT.get(domain, "")
+        base_prompt = system_prompt_override if system_prompt_override else f"You are the {role} Agent. Your job is to act as a strict codebase validator and SME. {domain_ctx}"
+        
+        system_prompt = (
+            f"{base_prompt}\n\n"
+            "Guidelines:\n"
+            "1. You review proposals submitted by the Lead Coder.\n"
+            "2. Your review must be dynamic and based on the provided MCP compliance logs (PostgreSQL schema and OpenAPI contract check logs).\n"
+            "3. If there are violations in the compliance checks in your domain, you MUST reject the code. "
+            "You MUST output '❌ REVIEW FAILED:' at the very start of your message and detail the specific violations.\n"
+            "4. If and only if there are zero compliance violations in your domain, output '✓ REVIEW PASSED:' "
+            "at the start of your message.\n"
+        )
         self.domain = domain
         super().__init__(name=name, role=role, system_prompt=system_prompt, model=model)
 
@@ -573,8 +576,8 @@ class SwarmSession:
         round_passed = True
         reviewer_responses = []
 
-        # 2. Run reviews
-        for reviewer in reviewers:
+        # 2. Run reviews concurrently
+        async def review_task(reviewer):
             # Rehydrate Context from Band.ai Chat Context endpoint before reviewing
             logger.debug(f"[BAND REST] Rehydrating Chat Context for {reviewer.name}...")
             await reviewer.rest_client.agent_api_context.get_agent_chat_context(chat_id=self.room_id)
@@ -607,8 +610,6 @@ class SwarmSession:
                 coder_name=coder.name,
                 conductor_name=conductor.name
             )
-            self.add_message(reviewer.name, reviewer.role, review)
-            reviewer_responses.append((reviewer.name, reviewer.role, review))
 
             # Post message as Reviewer (mentioning Coder)
             logger.debug(f"[BAND REST] Posting Reviewer message to room...")
@@ -620,19 +621,9 @@ class SwarmSession:
                 )
             )
 
-            # Record per-reviewer vote in ConsensusTracker
-            review_failed = "❌ REVIEW FAILED" in review or "REVIEW FAILED" in review
-            current_round = self.tracker.rounds.get(self.pr_id, 0) + 1
-            self.tracker.record_vote(
-                self.pr_id, reviewer.name, reviewer.role,
-                "failed" if review_failed else "passed",
-                current_round,
-                domain=getattr(reviewer, 'domain', '')
-            )
-
             # If review failed, store violation memory
+            review_failed = "❌ REVIEW FAILED" in review or "REVIEW FAILED" in review
             if review_failed:
-                round_passed = False
                 # Extract a concise violation summary from the review (first 200 chars after FAILED)
                 violation_summary = review.split("FAILED", 1)[-1][:200].strip(": ") if "FAILED" in review else review[:200]
                 logger.debug(f"[BAND REST] Storing violation memory for {reviewer.name}...")
@@ -661,6 +652,27 @@ class SwarmSession:
                         )
                     else:
                         raise e
+            return reviewer, review
+
+        # Run all reviewer tasks concurrently using asyncio.gather
+        review_tasks = [review_task(r) for r in reviewers]
+        completed_reviews = await asyncio.gather(*review_tasks)
+
+        for reviewer, review in completed_reviews:
+            self.add_message(reviewer.name, reviewer.role, review)
+            reviewer_responses.append((reviewer.name, reviewer.role, review))
+
+            # Record per-reviewer vote in ConsensusTracker
+            review_failed = "❌ REVIEW FAILED" in review or "REVIEW FAILED" in review
+            current_round = self.tracker.rounds.get(self.pr_id, 0) + 1
+            self.tracker.record_vote(
+                self.pr_id, reviewer.name, reviewer.role,
+                "failed" if review_failed else "passed",
+                current_round,
+                domain=getattr(reviewer, 'domain', '')
+            )
+            if review_failed:
+                round_passed = False
 
         # 3. Register outcome in ConsensusTracker
         outcome = "approved" if round_passed else "failed"

@@ -319,7 +319,8 @@ function JITSynthesisPanel({ agents, status, isAnalyzing }) {
 }
 
 // ─── Topology Graph (SVG) ──────────────────────────────────────────────
-function AgentTopology({ status, activeSender, activeAgents }) {
+function AgentTopology({ status, activeSender, activeAgents, lastActiveSenders = [] }) {
+  const isDeployed = status === "RUNNING" || status === "COMPLETED" || status === "HALTED" || status === "CRASHED";
   const agents = useMemo(() => {
     if (status !== "IDLE" && activeAgents?.length > 0) return activeAgents;
     return [
@@ -354,16 +355,30 @@ function AgentTopology({ status, activeSender, activeAgents }) {
     });
   }, [agents]);
 
-  const isNodeActive = useCallback((nodeId) => {
-    if (!activeSender) return false;
-    const normActive = normalizeName(activeSender);
+  const matchesSender = useCallback((senderName, nodeId) => {
+    if (!senderName) return false;
+    const normActive = normalizeName(senderName);
     const node = nodes.find(n => n.id === nodeId);
     if (!node) return false;
     if (node.id === "conductor") return normActive.startsWith("conductor");
     if (node.id === "coder") return normActive.startsWith("coder");
     const normNodeName = normalizeName(node.name);
     return normActive === normNodeName || normActive.includes(normNodeName) || (node.domain && normActive.includes(node.domain.toLowerCase()));
-  }, [activeSender, nodes]);
+  }, [nodes]);
+
+  const isNodeActive = useCallback((nodeId) => matchesSender(activeSender, nodeId), [activeSender, matchesSender]);
+
+  const isNodeRecentlyActive = useCallback((nodeId) => {
+    if (isNodeActive(nodeId)) return false; // currently active nodes use the brighter glow
+    return lastActiveSenders.some(s => matchesSender(s.sender, nodeId));
+  }, [lastActiveSenders, isNodeActive, matchesSender]);
+
+  const getRecentGlowOpacity = useCallback((nodeId) => {
+    const match = lastActiveSenders.find(s => matchesSender(s.sender, nodeId));
+    if (!match) return 0;
+    const age = Date.now() - match.ts;
+    return Math.max(0.2, 1 - age / 4000); // fade from 1 to 0.2 over 4s
+  }, [lastActiveSenders, matchesSender]);
 
   const conductorNode = nodes.find(n => n.id === "conductor");
 
@@ -375,43 +390,96 @@ function AgentTopology({ status, activeSender, activeAgents }) {
             <feGaussianBlur stdDeviation="6" result="blur" />
             <feComposite in="SourceGraphic" in2="blur" operator="over" />
           </filter>
+          <filter id="glow-deployed" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+          {/* Animated flow particle */}
+          {isDeployed && nodes.filter(n => n.id !== "conductor").map(n => (
+            <React.Fragment key={`flow-anim-${n.id}`}>
+              <circle id={`dot-${n.id}`} r="3" fill={getNodeColor(n)} opacity="0.9">
+                <animateMotion dur="2s" repeatCount="indefinite" begin={`${nodes.indexOf(n) * 0.4}s`}>
+                  <mpath href={`#path-${n.id}`} />
+                </animateMotion>
+              </circle>
+            </React.Fragment>
+          ))}
         </defs>
 
-        {/* Connection lines */}
+        {/* Connection lines + animated flow paths */}
         {conductorNode && nodes.filter(n => n.id !== "conductor").map(n => {
           const active = isNodeActive(n.id) || isNodeActive("conductor");
+          const color = getNodeColor(n);
           return (
-            <line key={`line-${n.id}`}
-              x1={conductorNode.x} y1={conductorNode.y} x2={n.x} y2={n.y}
-              stroke={active ? getNodeColor(n) : "rgba(255,255,255,0.1)"}
-              strokeWidth={active ? 2 : 1.5}
-              strokeDasharray={active ? undefined : "4 4"}
-              className={active ? "flow-line-active" : ""}
-            />
+            <React.Fragment key={`line-${n.id}`}>
+              {/* Invisible path for flow animation */}
+              <path
+                id={`path-${n.id}`}
+                d={`M${conductorNode.x},${conductorNode.y} L${n.x},${n.y}`}
+                fill="none" stroke="none"
+              />
+              {/* Visible line */}
+              <line
+                x1={conductorNode.x} y1={conductorNode.y} x2={n.x} y2={n.y}
+                stroke={active ? color : isDeployed ? `${color}40` : "rgba(255,255,255,0.1)"}
+                strokeWidth={active ? 2.5 : isDeployed ? 1.5 : 1.5}
+                strokeDasharray={isDeployed ? undefined : "4 4"}
+                style={{ transition: "all 0.5s" }}
+              />
+              {/* Flow particle dot */}
+              {isDeployed && (
+                <circle r="3" fill={color} opacity="0.85">
+                  <animateMotion dur={`${1.5 + Math.random()}s`} repeatCount="indefinite" begin={`${nodes.indexOf(n) * 0.3}s`}>
+                    <mpath href={`#path-${n.id}`} />
+                  </animateMotion>
+                </circle>
+              )}
+            </React.Fragment>
           );
         })}
 
         {/* Nodes */}
         {nodes.map(n => {
           const active = isNodeActive(n.id);
+          const recentlyActive = isNodeRecentlyActive(n.id);
+          const recentOpacity = getRecentGlowOpacity(n.id);
+          const deployed = isDeployed;
+          const color = getNodeColor(n);
           return (
             <g key={n.id}>
+              {/* Active speaking glow (bright, pulsing) */}
               {active && (
-                <circle cx={n.x} cy={n.y} r="28" fill="none" stroke={getNodeColor(n)} strokeWidth="2.5"
+                <circle cx={n.x} cy={n.y} r="28" fill="none" stroke={color} strokeWidth="2.5"
                   filter="url(#glow-active)"
                   style={{ transformOrigin: `${n.x}px ${n.y}px`, animation: "pulse-ring 1.8s cubic-bezier(0.215, 0.610, 0.355, 1) infinite" }}
                 />
               )}
-              <circle cx={n.x} cy={n.y} r="22" fill="#0a0e1a"
-                stroke={active ? getNodeColor(n) : "rgba(255,255,255,0.15)"}
-                strokeWidth={active ? 2.5 : 1.5}
-                style={{ transition: "all 0.3s" }}
+              {/* Recently-spoken glow (dimmer, fading) */}
+              {recentlyActive && (
+                <circle cx={n.x} cy={n.y} r="27" fill="none" stroke={color} strokeWidth="1.8"
+                  filter="url(#glow-active)"
+                  opacity={recentOpacity * 0.6}
+                  style={{ transformOrigin: `${n.x}px ${n.y}px`, animation: "pulse-ring 2.5s ease-in-out infinite", transition: "opacity 0.5s" }}
+                />
+              )}
+              {/* Deployed but not speaking glow (subtle ambient) */}
+              {deployed && !active && !recentlyActive && (
+                <circle cx={n.x} cy={n.y} r="26" fill="none" stroke={color} strokeWidth="1.5"
+                  filter="url(#glow-deployed)"
+                  opacity="0.5"
+                  style={{ transformOrigin: `${n.x}px ${n.y}px`, animation: "pulse-ring 3s ease-in-out infinite" }}
+                />
+              )}
+              <circle cx={n.x} cy={n.y} r="22" fill={deployed ? `${color}08` : "#0a0e1a"}
+                stroke={active ? color : recentlyActive ? `${color}B0` : deployed ? `${color}80` : "rgba(255,255,255,0.15)"}
+                strokeWidth={active ? 2.5 : recentlyActive ? 2.2 : deployed ? 2 : 1.5}
+                style={{ transition: "all 0.4s" }}
               />
               <text x={n.x} y={n.y + 5} textAnchor="middle" fontSize="1.1rem">{n.icon || getDomainIcon(n.domain)}</text>
-              <text x={n.x} y={n.y + 38} textAnchor="middle" fontSize="0.65rem" fontWeight="bold" fill={active ? "#f3f4f6" : "#6b7280"}>
+              <text x={n.x} y={n.y + 38} textAnchor="middle" fontSize="0.65rem" fontWeight="bold" fill={active ? "#f3f4f6" : recentlyActive ? "#e5e7eb" : deployed ? "#d1d5db" : "#6b7280"}>
                 {n.label?.length > 14 ? n.label.substring(0, 12) + "…" : n.label}
               </text>
-              <text x={n.x} y={n.y + 49} textAnchor="middle" fontSize="0.55rem" fill="#4b5563">{n.sub}</text>
+              <text x={n.x} y={n.y + 49} textAnchor="middle" fontSize="0.55rem" fill={deployed ? "#9ca3af" : "#4b5563"}>{n.sub}</text>
             </g>
           );
         })}
@@ -791,6 +859,40 @@ function App() {
   const lastEvent = events[events.length - 1];
   const activeSender = lastEvent ? lastEvent.sender.toLowerCase() : "";
 
+  // ── Task 3: Glow persistence — track last 3 speakers with fade-out ──
+  const [lastActiveSenders, setLastActiveSenders] = useState([]);
+  const lastActiveSendersRef = useRef([]);
+
+  useEffect(() => {
+    if (!activeSender) return;
+    const now = Date.now();
+    setLastActiveSenders(prev => {
+      // Remove the current sender if already in the list, then prepend
+      const filtered = prev.filter(s => s.sender !== activeSender);
+      const updated = [{ sender: activeSender, ts: now }, ...filtered].slice(0, 3);
+      lastActiveSendersRef.current = updated;
+      return updated;
+    });
+    // Set up a cleanup timer to remove stale entries after 4s
+    const timer = setTimeout(() => {
+      setLastActiveSenders(prev => prev.filter(s => Date.now() - s.ts < 4000));
+    }, 4100);
+    return () => clearTimeout(timer);
+  }, [activeSender]);
+
+  // Refresh opacity values periodically during active debate
+  useEffect(() => {
+    if (status !== "RUNNING" || lastActiveSendersRef.current.length === 0) return;
+    const interval = setInterval(() => {
+      setLastActiveSenders(prev => {
+        const filtered = prev.filter(s => Date.now() - s.ts < 4000);
+        if (filtered.length !== prev.length) return filtered;
+        return [...prev]; // force re-render for opacity recalc
+      });
+    }, 500);
+    return () => clearInterval(interval);
+  }, [status]);
+
   // ── MCP Display Helpers ──
   const displaySchemaCheck = schemaCheck || initialSchemaCheck;
   const displayOpenapiCheck = openapiCheck || initialOpenapiCheck;
@@ -946,7 +1048,7 @@ function App() {
                   Pull Request
                 </label>
                 <select value={selectedPrNumber}
-                  onChange={(e) => { setSelectedPrNumber(e.target.value); if (e.target.value) fetchPRDetails(selectedRepo, parseInt(e.target.value, 10)); }}
+                  onChange={(e) => { const prNum = e.target.value; setSelectedPrNumber(prNum); if (prNum) fetchPRDetails(selectedRepo, parseInt(prNum, 10)); }}
                   style={{
                     width: "100%", padding: "0.4rem 0.6rem", borderRadius: "8px",
                     border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.3)",
@@ -956,7 +1058,7 @@ function App() {
                   {prsList.length === 0 ? (
                     <option value="">-- No open PRs --</option>
                   ) : prsList.map(pr => (
-                    <option key={pr.number} value={pr.number}>#{pr.number} — {pr.title}</option>
+                    <option key={pr.number} value={String(pr.number)}>#{pr.number} — {pr.title}</option>
                   ))}
                 </select>
               </div>
@@ -1012,12 +1114,12 @@ function App() {
                   </span>
                 )}
               </div>
-              <AgentTopology status={status} activeSender={activeSender} activeAgents={activeAgents} />
+              <AgentTopology status={status} activeSender={activeSender} activeAgents={activeAgents} lastActiveSenders={lastActiveSenders} />
             </section>
           )}
 
-          {/* Triage & HITL panels */}
-          {triageResult && (
+          {/* Triage & HITL panels — only show during debate phase onwards */}
+          {triageResult && activePhase >= 3 && (
             <section className={`glass-panel fade-in ${status === "PENDING_HUMAN_APPROVAL" ? "glow-red" : ""}`} style={{ padding: "1.25rem" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
                 <span style={{ fontSize: "1rem" }}>🛡️</span>
@@ -1083,103 +1185,128 @@ function App() {
             </section>
           )}
 
-          {/* MCP Verification Results (only when checks exist) */}
-          {hasAnyMcp && (
-            <section className="glass-panel fade-in" style={{ padding: "1.25rem" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1rem" }}>
-                <span style={{ fontSize: "1rem" }}>🔌</span>
-                <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#06b6d4" }}>MCP Bounded Context Checks</h2>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-                {showSchemaCheck && (
-                  <McpCheckRow
-                    title="PostgreSQL Schema"
-                    target={mcpTargets.table}
-                    check={displaySchemaCheck}
-                    status={status}
-                  />
-                )}
-                {showOpenapiCheck && (
-                  <McpCheckRow
-                    title="OpenAPI Contract"
-                    target={mcpTargets.endpoint}
-                    check={displayOpenapiCheck}
-                    status={status}
-                  />
-                )}
-                {showRbacCheck && (
-                  <McpCheckRow
-                    title="RBAC Access Policy"
-                    target={mcpTargets.rbac}
-                    check={displayRbacCheck}
-                    status={status}
-                  />
-                )}
-              </div>
-            </section>
-          )}
 
-          {/* Phase 5: Verdict Summary */}
-          {debateSummary && (status === "HALTED" || status === "COMPLETED") && (
-            <section className="glass-panel fade-in" style={{ padding: "1.25rem", borderLeft: `3px solid ${status === "COMPLETED" ? "#22c55e" : "#ef4444"}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1rem" }}>
-                <span style={{ fontSize: "1.1rem" }}>📊</span>
-                <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: status === "COMPLETED" ? "#22c55e" : "#ef4444" }}>
-                  Verdict
+
+          {/* Phase 5: Verdict Summary — Rich Scorecard */}
+          {debateSummary && (status === "HALTED" || status === "COMPLETED" || status === "CRASHED") && (() => {
+            const jitAgentCount = activeAgents.filter(a => a.id?.startsWith("reviewer")).length;
+            const uniqueDomains = [...new Set(activeAgents.filter(a => a.id?.startsWith("reviewer") && a.domain).map(a => a.domain))];
+            const totalFilesAnalyzed = (diffFiles?.length || displayDiffFiles?.length || 0);
+
+            const verdictColor = status === "COMPLETED" ? "#22c55e" : "#ef4444";
+
+            return (
+            <section className="glass-panel fade-in" style={{ padding: "1.5rem", borderLeft: `3px solid ${verdictColor}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1.25rem" }}>
+                <span style={{ fontSize: "1.2rem" }}>📊</span>
+                <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 800, color: verdictColor }}>
+                  Verdict Scorecard
                 </h2>
+                <span style={{
+                  fontSize: "0.6rem", fontWeight: 700, padding: "0.15rem 0.5rem", borderRadius: "6px",
+                  background: `${verdictColor}15`, border: `1px solid ${verdictColor}30`, color: verdictColor,
+                  textTransform: "uppercase", letterSpacing: "0.08em", marginLeft: "auto"
+                }}>
+                  {status === "COMPLETED" ? "✓ PASSED" : status === "CRASHED" ? "💥 CRASHED" : "⚠ HALTED"}
+                </span>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.5rem", marginBottom: "1rem" }}>
+              {/* Stats Grid — 3x2 */}
+              <div className="verdict-stats-grid" style={{
+                display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.6rem", marginBottom: "1.25rem"
+              }}>
                 {[
-                  { label: "Rounds", value: debateSummary.total_rounds, color: "#f59e0b" },
-                  { label: "Outcome", value: debateSummary.is_deadlocked ? "Deadlock" : "Consensus", color: debateSummary.is_deadlocked ? "#ef4444" : "#22c55e" },
-                  { label: "Rejections", value: debateSummary.rejections, color: "#ef4444" },
-                  { label: "Approvals", value: debateSummary.approvals, color: "#22c55e" }
-                ].map(({ label, value, color }) => (
-                  <div key={label} style={{
-                    background: "rgba(255,255,255,0.02)", borderRadius: "10px",
-                    padding: "0.6rem", textAlign: "center"
+                  { icon: "🔄", label: "Rounds", value: debateSummary.total_rounds, color: "#f59e0b" },
+                  { icon: "🤖", label: "JIT Agents", value: jitAgentCount, color: "#a855f7" },
+                  { icon: "📁", label: "Files Analyzed", value: totalFilesAnalyzed, color: "#06b6d4" },
+                  { icon: "✅", label: "Approvals", value: debateSummary.approvals, color: "#22c55e" },
+                  { icon: "❌", label: "Rejections", value: debateSummary.rejections, color: "#ef4444" },
+                  { icon: "⚡", label: "Swarm Model", value: "Multi-LLM", color: "#f97316" },
+                ].map(({ icon, label, value, color }) => (
+                  <div key={label} className="verdict-stat-card" style={{
+                    background: `${color}08`, borderRadius: "12px",
+                    padding: "0.75rem 0.6rem", textAlign: "center",
+                    border: `1px solid ${color}18`,
+                    transition: "all 0.3s"
                   }}>
-                    <div style={{ fontSize: "1.3rem", fontWeight: 800, color }}>{value}</div>
-                    <div style={{ fontSize: "0.65rem", color: "#6b7280", fontWeight: 500 }}>{label}</div>
+                    <div style={{ fontSize: "1rem", marginBottom: "0.2rem" }}>{icon}</div>
+                    <div style={{ fontSize: "1.4rem", fontWeight: 800, color, lineHeight: 1.1 }}>{value}</div>
+                    <div style={{ fontSize: "0.62rem", color: "#6b7280", fontWeight: 600, marginTop: "0.2rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
                   </div>
                 ))}
               </div>
 
-              {/* Per-reviewer breakdown */}
-              {debateSummary.rejections_by_reviewer && Object.entries(debateSummary.rejections_by_reviewer).map(([name, info]) => (
-                <div key={name} style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  padding: "0.4rem 0.6rem", marginBottom: "0.3rem", borderRadius: "8px",
-                  background: "rgba(239,68,68,0.04)", border: "1px solid rgba(239,68,68,0.1)"
+              {/* Outcome + Domains */}
+              <div style={{ display: "flex", gap: "0.6rem", marginBottom: "1rem" }}>
+                <div style={{
+                  flex: 1, padding: "0.65rem 0.75rem", borderRadius: "10px",
+                  background: debateSummary.is_deadlocked ? "rgba(239,68,68,0.06)" : "rgba(34,197,94,0.06)",
+                  border: `1px solid ${debateSummary.is_deadlocked ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)"}`
                 }}>
-                  <div>
-                    <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "#e5e7eb" }}>{info.role}</span>
-                    <span style={{
-                      fontSize: "0.6rem", marginLeft: "0.4rem",
-                      background: `${getDomainColor(info.domain)}12`, color: getDomainColor(info.domain),
-                      padding: "0.05rem 0.3rem", borderRadius: "3px"
-                    }}>{info.domain}</span>
+                  <div style={{ fontSize: "0.62rem", color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.25rem" }}>Outcome</div>
+                  <div style={{ fontSize: "0.88rem", fontWeight: 700, color: debateSummary.is_deadlocked ? "#ef4444" : "#22c55e" }}>
+                    {debateSummary.is_deadlocked ? "⚠️ Deadlock" : "✓ Consensus"}
                   </div>
-                  <span style={{ color: "#ef4444", fontWeight: 700, fontSize: "0.8rem" }}>{info.count}× rejected</span>
                 </div>
-              ))}
+                <div style={{
+                  flex: 1.5, padding: "0.65rem 0.75rem", borderRadius: "10px",
+                  background: "rgba(168,85,247,0.04)", border: "1px solid rgba(168,85,247,0.12)"
+                }}>
+                  <div style={{ fontSize: "0.62rem", color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.3rem" }}>Domains Covered</div>
+                  <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
+                    {uniqueDomains.length > 0 ? uniqueDomains.map(d => (
+                      <span key={d} style={{
+                        fontSize: "0.65rem", padding: "0.1rem 0.4rem", borderRadius: "4px",
+                        background: `${getDomainColor(d)}15`, color: getDomainColor(d),
+                        border: `1px solid ${getDomainColor(d)}25`, fontWeight: 600
+                      }}>{getDomainIcon(d)} {d}</span>
+                    )) : <span style={{ fontSize: "0.7rem", color: "#4b5563", fontStyle: "italic" }}>—</span>}
+                  </div>
+                </div>
+              </div>
 
+              {/* Per-reviewer breakdown */}
+              {debateSummary.rejections_by_reviewer && Object.keys(debateSummary.rejections_by_reviewer).length > 0 && (
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <div style={{ fontSize: "0.65rem", color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.4rem" }}>Rejection Breakdown</div>
+                  {Object.entries(debateSummary.rejections_by_reviewer).map(([name, info]) => (
+                    <div key={name} style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      padding: "0.4rem 0.6rem", marginBottom: "0.3rem", borderRadius: "8px",
+                      background: "rgba(239,68,68,0.04)", border: "1px solid rgba(239,68,68,0.1)"
+                    }}>
+                      <div>
+                        <span style={{ fontWeight: 600, fontSize: "0.8rem", color: "#e5e7eb" }}>{info.role}</span>
+                        <span style={{
+                          fontSize: "0.6rem", marginLeft: "0.4rem",
+                          background: `${getDomainColor(info.domain)}12`, color: getDomainColor(info.domain),
+                          padding: "0.05rem 0.3rem", borderRadius: "3px"
+                        }}>{info.domain}</span>
+                      </div>
+                      <span style={{ color: "#ef4444", fontWeight: 700, fontSize: "0.8rem" }}>{info.count}× rejected</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Final resolution banner */}
               <div style={{
-                marginTop: "0.6rem", padding: "0.4rem 0.6rem", borderRadius: "8px",
+                padding: "0.5rem 0.75rem", borderRadius: "10px",
                 background: status === "COMPLETED" ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)",
                 border: `1px solid ${status === "COMPLETED" ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)"}`
               }}>
-                <span style={{ fontSize: "0.78rem", color: status === "COMPLETED" ? "#22c55e" : "#ef4444", fontWeight: 600 }}>
+                <span style={{ fontSize: "0.82rem", color: status === "COMPLETED" ? "#22c55e" : "#ef4444", fontWeight: 700 }}>
                   {resolutionType === "consensus" ? "✓ Approved by Swarm Consensus"
                     : resolutionType === "human_override" ? "✓ Approved (Human Override)"
                     : resolutionType === "halted" ? "⚠️ Halted — PR Rejected"
                     : status === "COMPLETED" ? (debateSummary?.is_deadlocked ? "✓ Approved (Human Override)" : "✓ Approved by Swarm Consensus")
+                    : status === "CRASHED" ? "💥 Pipeline Crashed"
                     : "⚠️ Halted — Awaiting HITL"}
                 </span>
               </div>
             </section>
-          )}
+            );
+          })()}
         </div>
 
         {/* ─── RIGHT COLUMN: Live Feed ─── */}

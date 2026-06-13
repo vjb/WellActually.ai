@@ -2,8 +2,11 @@ import json
 import logging
 import os
 import re
+from typing import List, Dict, Any
 
 logger = logging.getLogger("GovernanceEngine")
+
+_SCHEMA_CACHE = None
 
 
 def parse_codeowners(content: str) -> dict:
@@ -41,7 +44,7 @@ def parse_codeowners(content: str) -> dict:
     return rules
 
 
-def triage_pr(diff_files: list[str], codeowners_rules: dict) -> dict:
+def triage_pr(diff_files: List[str], codeowners_rules: Dict[str, Any]) -> Dict[str, Any]:
     """
     Triages modified files in a PR diff against parsed CODEOWNERS rules.
     
@@ -178,7 +181,7 @@ class TelemetryScanner:
         """
         self.log_path = log_path
 
-    def scan_leaks(self) -> list[dict]:
+    def scan_leaks(self) -> List[Dict[str, Any]]:
         """
         Scans logs for all WARNING and ERROR level entries as potential anomalies.
         Logs a warning alert and returns all matching log entries.
@@ -214,9 +217,13 @@ def _parse_schema_columns(schema_sql: str) -> dict:
     Returns {table_name: set(column_names)}.
     """
     tables = {}
+    # Clean SQL comments to prevent matching commented-out tables/columns
+    schema_sql_clean = re.sub(r'/\*.*?\*/', '', schema_sql, flags=re.DOTALL)
+    schema_sql_clean = re.sub(r'--.*$', '', schema_sql_clean, flags=re.MULTILINE)
+
     for match in re.finditer(
         r"CREATE\s+TABLE\s+(\w+)\s*\((.*?)\);",
-        schema_sql, re.IGNORECASE | re.DOTALL
+        schema_sql_clean, re.IGNORECASE | re.DOTALL
     ):
         table = match.group(1).lower()
         cols = set()
@@ -270,46 +277,254 @@ def _extract_select_columns(code_content: str) -> list:
 def verify_schema_compliance(code_content: str, schema_path: str) -> dict:
     """
     Validates code_content against the PostgreSQL schema boundaries.
-    Parses INSERT INTO and SELECT statements from code and diffs column names
-    against the actual CREATE TABLE definitions in the schema file.
+    Parses Python AST to extract all SQL query strings, cleans comments,
+    resolves referenced tables, and validates select columns and other query 
+    tokens against the actual CREATE TABLE schemas.
     """
+    import ast
+    from src.config import config
+    from src.mcp_client import MCPClient
+
+    global _SCHEMA_CACHE
     violations = []
-
-    # Parse the real schema
     schema_columns = {}
-    if not os.path.exists(schema_path):
-        return {
-            "compliant": False,
-            "violations": [f"Schema file not found: {schema_path}"]
-        }
-    with open(schema_path, "r", encoding="utf-8") as f:
-        schema_sql = f.read()
-    if not schema_sql.strip():
-        return {
-            "compliant": False,
-            "violations": ["Schema file is empty"]
-        }
-    schema_columns = _parse_schema_columns(schema_sql)
 
-    # Parse INSERT statements from the code
-    inserts = _extract_insert_columns(code_content)
-    for table, code_cols in inserts:
-        if table in schema_columns:
-            for col in code_cols:
-                if col not in schema_columns[table]:
-                    violations.append(f"Column '{col}' does not exist in table '{table}' schema")
+    use_real = config.get("USE_REAL_DB", default="false").lower() == "true"
+    db_url = config.get("DATABASE_URL")
 
-    # Parse SELECT statements from the code
-    selects = _extract_select_columns(code_content)
-    for table, code_cols in selects:
-        if table in schema_columns:
-            for col in code_cols:
-                if col not in schema_columns[table]:
-                    violations.append(f"Column '{col}' does not exist in table '{table}' schema")
+    if use_real and db_url:
+        if _SCHEMA_CACHE is not None:
+            schema_columns = _SCHEMA_CACHE
+            logger.info("Using cached schema columns from live PostgreSQL database.")
+        else:
+            logger.info(f"Connecting to live Postgres MCP server for schema checks: {db_url}")
+            client = MCPClient("npx", ["-y", "@modelcontextprotocol/server-postgres", db_url])
+            try:
+                client.start()
+                res = client.call_tool("query", {
+                    "sql": "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public';"
+                })
+                content = res.get("content", [])
+                if content and content[0].get("type") == "text":
+                    text_data = content[0].get("text", "[]")
+                    records = json.loads(text_data)
+                    for rec in records:
+                        table = rec.get("table_name").lower()
+                        column = rec.get("column_name").lower()
+                        if table not in schema_columns:
+                            schema_columns[table] = set()
+                        schema_columns[table].add(column)
+                _SCHEMA_CACHE = schema_columns
+                logger.info(f"Successfully loaded and cached {len(schema_columns)} tables from live PostgreSQL database via MCP.")
+            except Exception as e:
+                logger.warning(f"Failed to fetch schema from live Postgres MCP server, falling back to local file. Reason: {e}")
+                schema_columns = {}
+            finally:
+                client.close()
+
+    # Fallback to local file parsing if live DB checks failed or are disabled
+    if not schema_columns:
+        if not os.path.exists(schema_path):
+            return {
+                "compliant": False,
+                "violations": [f"Schema file not found: {schema_path}"]
+            }
+        with open(schema_path, "r", encoding="utf-8") as f:
+            schema_sql = f.read()
+        if not schema_sql.strip():
+            return {
+                "compliant": False,
+                "violations": ["Schema file is empty"]
+            }
+        schema_columns = _parse_schema_columns(schema_sql)
+
+    # 1. Extract all SQL string literals from code
+    sql_queries = []
+    
+    # Extract Python code from markdown code block if present
+    code_to_parse = code_content
+    code_blocks = re.findall(r"```python\s*(.*?)\s*```", code_content, re.DOTALL)
+    if code_blocks:
+        code_to_parse = "\n".join(code_blocks)
+
+    try:
+        tree = ast.parse(code_to_parse)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                val = node.value.strip()
+                # Match SELECT, INSERT, UPDATE, DELETE queries
+                if any(k in val.upper() for k in ["SELECT", "INSERT INTO", "UPDATE", "DELETE FROM"]):
+                    sql_queries.append(val)
+    except Exception:
+        # Fallback to lines/regex extraction if the snippet is not valid Python
+        sql_queries = []
+        for line in code_content.splitlines():
+            line_upper = line.upper()
+            if any(k in line_upper for k in ["SELECT", "INSERT INTO", "UPDATE", "DELETE FROM"]):
+                sql_queries.append(line)
+        if not sql_queries:
+            sql_queries = [code_to_parse]
+
+    # SQL keywords to ignore when checking column tokens
+    SQL_KEYWORDS = {
+        "select", "insert", "update", "delete", "from", "where", "join", "on", 
+        "and", "or", "not", "in", "is", "null", "values", "into", "set", "as", 
+        "by", "order", "group", "having", "limit", "offset", "inner", "left", 
+        "right", "outer", "cross", "natural", "true", "false", "uuid", "uuid_generate_v4",
+        "primary", "key", "foreign", "references", "table", "create", "drop", "alter"
+    }
+
+    for query in sql_queries:
+        # Clean comments from the query
+        query_clean = re.sub(r'/\*.*?\*/', '', query, flags=re.DOTALL)
+        query_clean = re.sub(r'--.*$', '', query_clean, flags=re.MULTILINE)
+
+        # Identify which tables are referenced in this query
+        referenced_tables = []
+        for table_name in schema_columns.keys():
+            if re.search(r'\b' + re.escape(table_name) + r'\b', query_clean, re.IGNORECASE):
+                referenced_tables.append(table_name)
+
+        if not referenced_tables:
+            continue
+
+        # Check for INSERT columns
+        insert_matches = list(re.finditer(r"INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)", query_clean, re.IGNORECASE))
+        for match in insert_matches:
+            target_table = match.group(1).lower()
+            if target_table in schema_columns:
+                # Extract columns
+                cols = [c.strip().strip("'\"`").lower() for c in match.group(2).split(",")]
+                for col in cols:
+                    if col not in schema_columns[target_table]:
+                        violations.append(f"Column '{col}' does not exist in table '{target_table}' schema")
+
+        # Check for SELECT columns (explicit list, ignore SELECT *)
+        select_matches = list(re.finditer(r"SELECT\s+(.+?)\s+FROM\s+", query_clean, re.IGNORECASE | re.DOTALL))
+        for match in select_matches:
+            cols_str = match.group(1).strip()
+            if cols_str == "*":
+                continue
+            
+            # Split select list, stripping aliases, expressions, and functions
+            # e.g., bp.spending_limit_usd -> spending_limit_usd
+            # e.g., COUNT(*) -> skip/ignore
+            # e.g., bp.spending_limit_usd AS limit -> spending_limit_usd
+            select_items = cols_str.split(",")
+            for item in select_items:
+                item_clean = item.strip()
+                # Ignore SQL function calls like COUNT(*), MAX(...)
+                if "(" in item_clean:
+                    continue
+                # Remove AS alias
+                item_clean = re.split(r'\s+AS\s+', item_clean, flags=re.IGNORECASE)[0].strip()
+                # Remove trailing words if alias defined without AS: e.g. "bp.spending_limit_usd limit"
+                item_clean = item_clean.split()[-1] if len(item_clean.split()) > 1 else item_clean
+                
+                # Strip qualifiers: e.g. bp.spending_limit_usd -> spending_limit_usd
+                if "." in item_clean:
+                    item_clean = item_clean.split(".")[-1]
+                
+                col_name = item_clean.strip("'\"`").lower()
+                
+                # Verify if this column exists in at least one of the referenced tables
+                col_found = False
+                for tbl in referenced_tables:
+                    if col_name in schema_columns[tbl]:
+                        col_found = True
+                        break
+                
+                # Special exceptions for identifiers like *
+                if col_name == "*" or not col_name.isidentifier():
+                    continue
+
+                if not col_found:
+                    # Report violation against the first referenced table
+                    violations.append(f"Column '{col_name}' does not exist in table '{referenced_tables[0]}' schema")
+
+        # Clean string literals to prevent checking strings (like 'active', 'completed') as identifiers
+        query_temp = re.sub(r"'(?:''|[^'])*'", " ", query_clean)
+        query_temp = re.sub(r'"(?:""|[^"])*"', " ", query_temp)
+
+        # Clean placeholders from query
+        query_temp = re.sub(r'%[a-zA-Z]', ' ', query_temp)
+        query_temp = re.sub(r'\$\d+', ' ', query_temp)
+        query_temp = re.sub(r':\w+', ' ', query_temp)
+        query_temp = re.sub(r'\?', ' ', query_temp)
+
+        # Extract table aliases from FROM and JOIN clauses
+        # e.g., "FROM billing_profiles bp" or "FROM billing_profiles AS bp"
+        aliases = set()
+        alias_to_table = {}
+        for table_name in schema_columns.keys():
+            matches = re.finditer(
+                r'\b' + re.escape(table_name) + r'\b\s+(?:AS\s+)?([a-zA-Z_]\w*)\b',
+                query_temp,
+                re.IGNORECASE
+            )
+            for m in matches:
+                alias = m.group(1).lower()
+                if alias not in SQL_KEYWORDS:
+                    aliases.add(alias)
+                    alias_to_table[alias] = table_name
+
+        # Check WHERE, JOIN, and ORDER BY clauses for general token violations
+        # Find all words/identifiers in the query that are NOT followed by a parenthesis
+        all_words = re.findall(r'\b(?:([a-zA-Z_]\w*)\.)?([a-zA-Z_]\w*)\b(?!\s*\()', query_temp)
+        for prefix, word in all_words:
+            word_lower = word.lower()
+            prefix_lower = prefix.lower() if prefix else ""
+            
+            if word_lower in SQL_KEYWORDS:
+                continue
+            if word_lower.isdigit() or not word_lower.isidentifier():
+                continue
+            if word_lower in schema_columns:  # Table name
+                continue
+            if word_lower in aliases:  # Table alias
+                continue
+
+            # Determine if this column exists in the database schema at all
+            is_valid_db_column = False
+            for tbl, cols in schema_columns.items():
+                if word_lower in cols:
+                    is_valid_db_column = True
+                    break
+
+            if prefix_lower:
+                if prefix_lower in schema_columns:
+                    if word_lower not in schema_columns[prefix_lower]:
+                        violations.append(f"Column '{word_lower}' does not exist in table '{prefix_lower}' schema")
+                elif prefix_lower in alias_to_table:
+                    target_table = alias_to_table[prefix_lower]
+                    if word_lower not in schema_columns[target_table]:
+                        violations.append(f"Column '{word_lower}' does not exist in table '{target_table}' schema")
+                else:
+                    if is_valid_db_column:
+                        in_referenced = any(word_lower in schema_columns[tbl] for tbl in referenced_tables)
+                        if not in_referenced:
+                            violations.append(f"Column '{word_lower}' does not exist in table '{referenced_tables[0]}' schema")
+                    else:
+                        violations.append(f"Column '{word_lower}' does not exist in table '{referenced_tables[0]}' schema")
+            else:
+                if is_valid_db_column:
+                    in_referenced = any(word_lower in schema_columns[tbl] for tbl in referenced_tables)
+                    if not in_referenced:
+                        violations.append(f"Column '{word_lower}' does not exist in table '{referenced_tables[0]}' schema")
+                else:
+                    violations.append(f"Column '{word_lower}' does not exist in table '{referenced_tables[0]}' schema")
+
+    # De-duplicate violations while preserving order
+    seen = set()
+    deduped_violations = []
+    for v in violations:
+        if v not in seen:
+            seen.add(v)
+            deduped_violations.append(v)
 
     return {
-        "compliant": len(violations) == 0,
-        "violations": violations
+        "compliant": len(deduped_violations) == 0,
+        "violations": deduped_violations
     }
 
 

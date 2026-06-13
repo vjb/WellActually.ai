@@ -2,6 +2,8 @@ import os
 import sys
 import asyncio
 import time
+import json
+import logging
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,8 +12,93 @@ from pydantic import BaseModel
 # Ensure root path is in python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.swarm import SwarmSession, CoderAgent, ReviewerAgent, Agent
+from src.swarm import SwarmSession, CoderAgent, ReviewerAgent, Agent, post_github_pr_comment
 from src.governance import verify_schema_compliance, verify_openapi_compliance, verify_rbac_compliance, TelemetryScanner
+
+logger = logging.getLogger("FastAPIServer")
+
+def format_scorecard_comment(state) -> str:
+    """Formats the markdown scorecard comment to post to GitHub."""
+    # Emoji indicators based on compliance status
+    def get_emoji(check):
+        if not check:
+            return "❔ N/A"
+        return "✅ Passed" if check.get("compliant", False) else "❌ Failed"
+        
+    schema_emoji = get_emoji(state.schema_check)
+    openapi_emoji = get_emoji(state.openapi_check)
+    rbac_emoji = get_emoji(state.rbac_check)
+    
+    # Format violations lists
+    def format_violations(check):
+        if not check or not check.get("violations"):
+            return "No violations."
+        return "\n".join(f"- {v}" for v in check["violations"])
+
+    schema_violations = format_violations(state.schema_check)
+    openapi_violations = format_violations(state.openapi_check)
+    rbac_violations = format_violations(state.rbac_check)
+    
+    # Format anomalies list
+    if state.watchdog_logs:
+        anomalies_str = "\n".join(f"- **{a['service']}**: {a['message']}" for a in state.watchdog_logs)
+    else:
+        anomalies_str = "No anomalies detected."
+        
+    # Format debate rounds summary
+    debate_rounds_info = f"Adversarial debate completed in {state.consensus_round} rounds."
+    if state.debate_summary:
+        round_hist = state.debate_summary.get("round_history", [])
+        if round_hist:
+            debate_rounds_info += "\n" + "\n".join(
+                f"- **Round {r.get('round')}:** {r.get('outcome', 'unknown').upper()}"
+                for r in round_hist
+            )
+
+    triage_info = "Status: OK"
+    if state.triage_result:
+        triage_status = state.triage_result.get("status")
+        req_approvals = ", ".join(state.triage_result.get("required_approvals", []))
+        if triage_status == "PENDING_HUMAN_APPROVAL":
+            triage_info = f"⚠️ Zero-Trust Check FAILED. Halted for human approval.\n- **Required approvals:** {req_approvals}"
+        else:
+            triage_info = f"✅ Clean triage. Status: {triage_status}"
+
+    body = f"""# 🛡️ Governance Swarm Audit Scorecard: {state.pr_id}
+
+### 📊 Simulation Summary
+- **Scenario:** `{state.scenario}`
+- **Status:** `{state.status}`
+- **Resolution:** `{state.resolution_type or 'N/A'}`
+- **Consensus Rounds:** `{state.consensus_round}`
+
+### 🔒 Triage Compliance Results
+{triage_info}
+
+### 🛠️ Code Verification Checks
+| Check Category | Compliance Status | Details |
+| :--- | :--- | :--- |
+| **PostgreSQL Schema Compliance** | {schema_emoji} | AST SQL column check |
+| **OpenAPI Contract Compliance** | {openapi_emoji} | Endpoint path/payload check |
+| **Middleware RBAC Check** | {rbac_emoji} | Sensitive financial column role verification |
+
+#### 📁 Schema Violations
+{schema_violations}
+
+#### 📁 OpenAPI Violations
+{openapi_violations}
+
+#### 📁 RBAC Violations
+{rbac_violations}
+
+### 🚨 Telemetry Watchdog Scanner
+{anomalies_str}
+
+### 💬 Consensus Debate History
+{debate_rounds_info}
+"""
+    return body
+
 
 # Scenario configuration — single layered scenario for demo
 SCENARIO_CONFIG = {
@@ -61,6 +148,38 @@ class SwarmState:
         self.mcp_targets: Optional[Dict[str, Any]] = None
         self.generation = 0  # Incremented on reset to detect stale simulation tasks
 
+    def save_state(self):
+        """Serializes the current SwarmState to a local mock database file."""
+        state_dict = {
+            "status": self.status,
+            "scenario": self.scenario,
+            "pr_id": self.pr_id,
+            "diff_files": self.diff_files,
+            "triage_result": self.triage_result,
+            "consensus_round": self.consensus_round,
+            "room_id": self.room_id,
+            "current_code": self.current_code,
+            "schema_check": self.schema_check,
+            "openapi_check": self.openapi_check,
+            "rbac_check": self.rbac_check,
+            "debate_summary": self.debate_summary,
+            "resolution_type": self.resolution_type,
+            "initial_schema_check": self.initial_schema_check,
+            "initial_openapi_check": self.initial_openapi_check,
+            "initial_rbac_check": self.initial_rbac_check,
+            "mcp_targets": self.mcp_targets,
+            "generation": self.generation,
+            "human_consent": self.human_consent,
+            "events": self.events,
+            "watchdog_logs": self.watchdog_logs
+        }
+        try:
+            os.makedirs("mock_infrastructure", exist_ok=True)
+            with open("mock_infrastructure/session_state.json", "w", encoding="utf-8") as f:
+                json.dump(state_dict, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save state to session_state.json: {e}")
+
     def reset(self, scenario: str = "rbac_bypass"):
         self.status = "IDLE"
         self.events = []
@@ -84,6 +203,7 @@ class SwarmState:
         self.initial_rbac_check = None
         self.mcp_targets = cfg.get("mcp_targets")
         self.generation += 1  # Invalidate any running simulation tasks
+        self.save_state()
 
     def add_event(self, message: str, sender: str = "SYSTEM", role: str = "SYSTEM", level: str = "info"):
         self.events.append({
@@ -93,9 +213,16 @@ class SwarmState:
             "message": message,
             "level": level
         })
+        self.save_state()
 
 state = SwarmState()
 start_lock = asyncio.Lock()
+consent_events: Dict[str, asyncio.Event] = {}
+
+def get_consent_event(pr_id: str) -> asyncio.Event:
+    if pr_id not in consent_events:
+        consent_events[pr_id] = asyncio.Event()
+    return consent_events[pr_id]
 
 class ConsentRequest(BaseModel):
     approve: bool
@@ -127,25 +254,30 @@ async def run_simulation_task():
     
     triage_res = session.run_triage()
     state.triage_result = triage_res
+    state.save_state()
     
     if triage_res["status"] == "PENDING_HUMAN_APPROVAL":
         state.status = "PENDING_HUMAN_APPROVAL"
         state.add_event("❌ Zero-Trust Check FAILED: High-stakes paths matched. Automatic merge halted.", sender="TriageScanner", level="warning")
         state.add_event("Waiting for human operator manual approval to proceed...", level="warning")
+        state.save_state()
         
-        # Block until human consent
-        while state.human_consent is None:
-            if is_stale():
-                return  # State was reset, abandon this simulation
-            await asyncio.sleep(0.5)
+        # Block until human consent using asyncio.Event
+        pr_event = get_consent_event(state.pr_id)
+        pr_event.clear()
+        await pr_event.wait()
+        if is_stale():
+            return  # State was reset, abandon this simulation
             
         if not state.human_consent:
             state.status = "HALTED"
             state.add_event("⚠️ Human Operator REJECTED the compliance exception. Swarm terminated.", level="error")
+            state.save_state()
             return
             
         state.add_event("✓ Human Operator APPROVED the compliance exception. Proceeding with swarm review.", level="info")
         state.human_consent = None  # Reset for future steps
+        state.save_state()
         
     # 2. Run MCP & Telemetry Static Checks to populate dashboard early
     state.add_event("Scanning log stream for active anomalies...", sender="WatchdogDaemon", level="info")
@@ -153,6 +285,7 @@ async def run_simulation_task():
     state.watchdog_logs = anomalies
     for a in anomalies:
         state.add_event(f"Anomaly detected in {a['service']}: {a['message']}", sender="TelemetryScanner", level="warning")
+    state.save_state()
         
     # 3. Setup agents and run debate
     state.status = "RUNNING"
@@ -164,11 +297,13 @@ async def run_simulation_task():
     coder = CoderAgent(name_suffix=unique_suffix, model="gpt-4o-mini", scenario=state.scenario)
     reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-70B-Instruct", domain="auth")
     reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
+    state.save_state()
     
     try:
         await session.initialize_session(conductor, coder, [reviewer_auth, reviewer_cart])
         state.room_id = session.room_id
         state.add_event(f"Band.ai Task Room successfully created. ID: {session.room_id}", sender=conductor.name, role=conductor.role, level="info")
+        state.save_state()
         
         MAX_ROUNDS = 2
         for round_num in range(1, MAX_ROUNDS + 1):
@@ -203,16 +338,21 @@ async def run_simulation_task():
             
             # Store debate summary for frontend analytics card
             state.debate_summary = round_res.get("debate_summary")
+            state.save_state()
                 
             if round_res["is_deadlocked"]:
                 state.status = "HALTED"
                 state.add_event("⚠️ Swarm consensus reached deadlock! Round limit exceeded.", level="error")
                 state.add_event("Halt event published to Band.ai room. Escalating to Human Operator...", level="error")
+                state.save_state()
                 
                 # Wait for Human Consent Override
                 state.human_consent = None
-                while state.human_consent is None:
-                    await asyncio.sleep(0.5)
+                pr_event = get_consent_event(state.pr_id)
+                pr_event.clear()
+                await pr_event.wait()
+                if is_stale():
+                    return
                     
                 if state.human_consent:
                     state.status = "COMPLETED"
@@ -222,12 +362,14 @@ async def run_simulation_task():
                     state.status = "HALTED"
                     state.resolution_type = "halted"
                     state.add_event("❌ Human Operator agreed with SME and REJECTED the PR.", level="error")
+                state.save_state()
                 break
                 
             if round_res["round_passed"]:
                 state.status = "COMPLETED"
                 state.resolution_type = "consensus"
                 state.add_event("✓ Swarm Consensus reached! Code compliance checks passed.", level="info")
+                state.save_state()
                 break
                 
         # Safety net: if loop exhausted without consensus, escalate to HALTED
@@ -235,11 +377,15 @@ async def run_simulation_task():
             state.status = "HALTED"
             state.add_event("⚠️ Swarm consensus reached deadlock! Round limit exceeded.", level="error")
             state.add_event("Halt event published to Band.ai room. Escalating to Human Operator...", level="error")
+            state.save_state()
             
             # Wait for Human Consent Override
             state.human_consent = None
-            while state.human_consent is None:
-                await asyncio.sleep(0.5)
+            pr_event = get_consent_event(state.pr_id)
+            pr_event.clear()
+            await pr_event.wait()
+            if is_stale():
+                return
                 
             if state.human_consent:
                 state.status = "COMPLETED"
@@ -249,18 +395,28 @@ async def run_simulation_task():
                 state.status = "HALTED"
                 state.resolution_type = "halted"
                 state.add_event("❌ Human Operator agreed with SME and REJECTED the PR.", level="error")
+            state.save_state()
     except Exception as e:
         state.status = "CRASHED"
         state.add_event(f"💥 Swarm Execution CRASHED: {str(e)}", level="error")
         state.add_event("Zero-Fallback Mode Active. Crashed out directly on Band.ai platform limit.", level="error")
+        state.save_state()
         # Ensure we run cleanup (which preserves reused agents keys)
         await session.cleanup_agents(conductor, coder, [reviewer_auth, reviewer_cart])
         raise e
-        
+    # Post scorecard to GitHub PR
+    try:
+        comment_body = format_scorecard_comment(state)
+        await asyncio.to_thread(post_github_pr_comment, state.pr_id, comment_body)
+    except Exception as ge:
+        logger.error(f"Failed to post GitHub PR comment: {ge}")
+
     await session.cleanup_agents(conductor, coder, [reviewer_auth, reviewer_cart])
+    state.save_state()
+
 
 @app.get("/api/status")
-def get_status():
+async def get_status():
     return {
         "status": state.status,
         "scenario": state.scenario,
@@ -282,7 +438,7 @@ def get_status():
     }
 
 @app.get("/api/events")
-def get_events():
+async def get_events():
     return state.events
 
 class StartRequest(BaseModel):
@@ -300,27 +456,31 @@ async def start_simulation(background_tasks: BackgroundTasks, req: StartRequest 
         return {"status": "started", "scenario": req.scenario}
 
 @app.post("/api/consent")
-def submit_consent(req: ConsentRequest):
+async def submit_consent(req: ConsentRequest):
     if state.status not in ["PENDING_HUMAN_APPROVAL", "HALTED", "RUNNING"]:
         raise HTTPException(status_code=400, detail=f"Cannot submit consent in state '{state.status}'.")
     state.human_consent = req.approve
+    state.save_state()
+    get_consent_event(state.pr_id).set()  # Wake up any waiting coroutines
     return {"status": "ok", "consent": req.approve}
 
 @app.post("/api/reset")
-def reset_state():
+async def reset_state():
     if state.status == "RUNNING":
         raise HTTPException(status_code=400, detail="Cannot reset while simulation is running.")
+    old_pr_id = state.pr_id
     state.reset(scenario=state.scenario)
+    get_consent_event(old_pr_id).set()  # Wake up any waiting coroutines to let them exit
     return {"status": "reset"}
 
 @app.get("/api/telemetry")
-def get_telemetry():
+async def get_telemetry():
     scanner = TelemetryScanner("mock_infrastructure/app_logs.json")
     anomalies = scanner.scan_leaks()
     return anomalies
 
 @app.get("/api/mcp")
-def get_mcp():
+async def get_mcp():
     code = state.current_code or "def get_spending(user_id):\n    return db.query('SELECT spending_limit_usd, discount_tier FROM billing_profiles WHERE user_id = %s', user_id)"
     schema_check = verify_schema_compliance(code, "mock_infrastructure/postgres_schema.sql")
     openapi_check = verify_openapi_compliance(code, "mock_infrastructure/openapi_contract.json")

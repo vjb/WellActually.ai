@@ -5,6 +5,9 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from openai import OpenAI
 from dotenv import load_dotenv
 
+# Load environment variables early for pytest decorators
+load_dotenv()
+
 # Import the governance engine API under test
 from src.governance import (
     parse_codeowners,
@@ -178,12 +181,19 @@ async def test_band_real_connectivity():
     assert api_key, "BAND_API_KEY environment variable is not configured."
     
     from thenvoi_rest import AsyncRestClient
+    from thenvoi_rest.core.api_error import ApiError
     client = AsyncRestClient(api_key=api_key, base_url=rest_url)
     
-    profile_response = await client.human_api_profile.get_my_profile()
-    assert profile_response is not None, "Failed to retrieve profile response from Band.ai REST endpoint."
-    assert profile_response.data is not None, "Profile data is empty."
-    assert profile_response.data.email is not None, "Profile email is empty."
+    try:
+        profile_response = await client.human_api_profile.get_my_profile()
+        assert profile_response is not None, "Failed to retrieve profile response from Band.ai REST endpoint."
+        assert profile_response.data is not None, "Profile data is empty."
+        assert profile_response.data.email is not None, "Profile email is empty."
+    except ApiError as e:
+        if e.status_code == 429:
+            pytest.skip("Band.ai API rate limit (429) encountered. Skipping live connectivity test.")
+        else:
+            raise e
 
 
 # ============================================================================

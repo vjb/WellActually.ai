@@ -15,9 +15,10 @@ def install_hook():
     
     # Write pre-commit hook file
     # Shell script invocation of python script (portable across Unix and Git Bash on Windows)
+    python_bin = ".venv/Scripts/python" if sys.platform == "win32" else ".venv/bin/python"
     hook_content = (
         "#!/bin/sh\n"
-        '".venv/Scripts/python" src/githooks/compliance_hook.py\n'
+        f'"{python_bin}" src/githooks/compliance_hook.py\n'
     )
     
     with open(pre_commit_path, "w", newline="\n") as f:

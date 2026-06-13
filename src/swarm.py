@@ -3,9 +3,29 @@ import json
 import time
 import logging
 import uuid
-from typing import Optional
+import re
+from typing import Optional, List, Dict, Any
 from openai import OpenAI
 from dotenv import load_dotenv
+
+def sanitize_text(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    # Redact potential API keys (e.g. OpenAI keys, generic high-entropy hex/base64 strings)
+    sanitized = re.sub(r'\bsk-[a-zA-Z0-9]{32,}\b', '[REDACTED_API_KEY]', text)
+    # Redact standard email addresses
+    sanitized = re.sub(r'\b[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\b', '[REDACTED_EMAIL]', sanitized)
+    # Redact IPv4 addresses
+    sanitized = re.sub(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', '[REDACTED_IP]', sanitized)
+    # Redact typical password/secret assignments
+    sanitized = re.sub(
+        r'\b(password|pass|secret|token|key|private_key)\s*[:=]\s*([\'"])[^\'"]+\2', 
+        r'\1 = [REDACTED_SECRET]', 
+        sanitized, 
+        flags=re.IGNORECASE
+    )
+    return sanitized
+
 
 # Import the governance engine API
 from src.governance import (
@@ -20,19 +40,19 @@ from src.governance import (
 
 import thenvoi_rest
 
-# Ensure environment is loaded
-load_dotenv()
+# Initialize configuration settings using unified config manager
+from src.config import config
 
 # Initialize OpenAI client (routed to AIML API Partner Track)
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.aimlapi.com/v1")
+OPENAI_API_KEY = config.get("OPENAI_API_KEY")
+OPENAI_BASE_URL = config.get("OPENAI_BASE_URL", default="https://api.aimlapi.com/v1")
 
 client = None
 if OPENAI_API_KEY:
     client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
 # Initialize Featherless AI client
-FEATHERLESS_API_KEY = os.getenv("FEATHERLESS_API_KEY")
+FEATHERLESS_API_KEY = config.get("FEATHERLESS_API_KEY")
 featherless_client = None
 if FEATHERLESS_API_KEY:
     featherless_client = OpenAI(api_key=FEATHERLESS_API_KEY, base_url="https://api.featherless.ai/v1")
@@ -57,43 +77,80 @@ class Agent:
         self.rest_client = None
         self.band_name: Optional[str] = None  # Band.ai registered name (may differ from display name)
 
-    async def generate_response(self, messages: list[dict], context: str = "") -> str:
+    async def generate_response(self, messages: List[Dict[str, Any]], context: str = "") -> str:
         """
         Queries the AIML API or Featherless AI LLM endpoint using the dialogue history and context.
         """
+        import random
+        import asyncio
+
         # Determine the client and model to route to
         is_featherless = self.model.startswith("unsloth/") or "llama" in self.model.lower()
-        active_client = featherless_client if is_featherless else client
+        active_client = featherless_client if (is_featherless and featherless_client) else client
+        active_model = self.model
 
         if not active_client:
             return f"[Offline/Fallback Mode] {self.name} received messages."
 
-        api_messages = [{"role": "system", "content": self.system_prompt}]
-        if context:
-            api_messages.append({"role": "system", "content": f"Context/Ground Truth:\n{context}"})
+        system_prompt_clean = sanitize_text(self.system_prompt)
+        context_clean = sanitize_text(context) if context else ""
+
+        api_messages = [{"role": "system", "content": system_prompt_clean}]
+        if context_clean:
+            api_messages.append({"role": "system", "content": f"Context/Ground Truth:\n{context_clean}"})
 
         # Append structured message history
         for msg in messages:
             sender_info = f"{msg['sender']} ({msg['role']})"
             role_type = "assistant" if msg["sender"] == self.name else "user"
+            content_clean = sanitize_text(msg['content'])
             api_messages.append({
                 "role": role_type,
-                "content": f"[{sender_info}]: {msg['content']}"
+                "content": f"[{sender_info}]: {content_clean}"
             })
 
-        try:
-            import asyncio
+        async def make_call(target_client, target_model):
             response = await asyncio.to_thread(
-                active_client.chat.completions.create,
-                model=self.model,
+                target_client.chat.completions.create,
+                model=target_model,
                 messages=api_messages,
                 max_tokens=Agent.DEFAULT_MAX_TOKENS,
-                temperature=Agent.DEFAULT_TEMPERATURE
+                temperature=Agent.DEFAULT_TEMPERATURE,
+                timeout=15.0  # Explicit timeout
             )
             return response.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error(f"Agent {self.name} query failed: {e}")
-            raise e
+
+        # Resilient custom retry loop with exponential backoff and provider fallback
+        max_retries = 3
+        delay = 1.0
+        backoff_factor = 2.0
+
+        for attempt in range(max_retries + 1):
+            try:
+                # Try the primary client/model
+                return await make_call(active_client, active_model)
+            except Exception as primary_err:
+                logger.warning(
+                    f"Primary model query failed for agent {self.name} on attempt {attempt + 1}/{max_retries + 1}: {primary_err}"
+                )
+                
+                # Check if we should fallback from Featherless to AIML API
+                if is_featherless and (featherless_client is None or active_client == featherless_client) and client:
+                    logger.warning(f"Attempting fallback to AIML API for agent {self.name}...")
+                    fallback_model = "meta-llama/Llama-3-70b-instruct-hf" if "70b" in self.model.lower() else "meta-llama/Llama-3-8b-instruct-hf"
+                    try:
+                        return await make_call(client, fallback_model)
+                    except Exception as fallback_err:
+                        logger.error(f"Fallback query to AIML API also failed: {fallback_err}")
+                
+                if attempt == max_retries:
+                    logger.error(f"Agent {self.name} query completely failed after all retries.")
+                    raise primary_err
+                
+                # Exponential backoff with jitter
+                sleep_time = delay * (0.5 + random.random())
+                await asyncio.sleep(sleep_time)
+                delay *= backoff_factor
 
 
 class CoderAgent(Agent):
@@ -193,7 +250,7 @@ class ReviewerAgent(Agent):
         self.domain = domain
         super().__init__(name=name, role=role, system_prompt=system_prompt, model=model)
 
-    async def review_code(self, coder_code: str, schema_path: str, openapi_path: str, messages: list[dict]) -> str:
+    async def review_code(self, coder_code: str, schema_path: str, openapi_path: str, messages: List[Dict[str, Any]]) -> str:
         """
         Executes domain-specific compliance checks and injects results as context before LLM query.
         Pass None for schema_path or openapi_path to skip that check for this reviewer's domain.
@@ -231,7 +288,7 @@ class SwarmSession:
     """
     Orchestrates the lifecycle of a swarm review session using real Band.ai SDK calls.
     """
-    def __init__(self, pr_id: str, diff_files: list[str], codeowners_path: str, schema_path: str, openapi_path: str, log_path: str):
+    def __init__(self, pr_id: str, diff_files: List[str], codeowners_path: str, schema_path: str, openapi_path: str, log_path: str):
         self.pr_id = pr_id
         self.diff_files = diff_files
         self.codeowners_path = codeowners_path
@@ -282,7 +339,7 @@ class SwarmSession:
         except Exception as e:
             logger.error(f"[BAND REST] Failed to write local memory: {e}")
 
-    async def initialize_session(self, conductor: Agent, coder: CoderAgent, reviewers: list[ReviewerAgent]):
+    async def initialize_session(self, conductor: Agent, coder: CoderAgent, reviewers: List[ReviewerAgent]):
         """
         Registers agents on the platform, creates a chat room, and adds participants.
         No fallbacks are used. Any failures will raise exceptions directly.
@@ -423,7 +480,7 @@ class SwarmSession:
         
         return triage_res
 
-    async def run_debate_round(self, conductor: Agent, coder: CoderAgent, reviewers: list[ReviewerAgent]) -> dict:
+    async def run_debate_round(self, conductor: Agent, coder: CoderAgent, reviewers: List[ReviewerAgent]) -> Dict[str, Any]:
         """
         Phase 3/4: Runs a single round of debate with real Band.ai SDK calls.
         Memory API errors (403/plan restrictions) are caught and gracefully
@@ -560,14 +617,14 @@ class SwarmSession:
             "debate_summary": self.tracker.get_summary(self.pr_id)
         }
 
-    def run_watchdog_scan(self) -> list[dict]:
+    def run_watchdog_scan(self) -> List[Dict[str, Any]]:
         """
         Phase 5: Context-Aware Telemetry watchdog scan.
         """
         scanner = TelemetryScanner(self.log_path)
         return scanner.scan_leaks()
 
-    async def cleanup_agents(self, conductor: Agent, coder: CoderAgent, reviewers: list[ReviewerAgent]):
+    async def cleanup_agents(self, conductor: Agent, coder: CoderAgent, reviewers: List[ReviewerAgent]):
         """
         Tries to delete registered agents. Prints any deletion restrictions.
         """
@@ -584,3 +641,71 @@ class SwarmSession:
                         logger.info(f"[BAND REST] Agent {agent.name} deleted.")
                     except Exception as e:
                         logger.error(f"[BAND REST] Failed to delete agent {agent.name}: {e}")
+
+def post_github_pr_comment(pr_id: str, body: str) -> bool:
+    """
+    Posts a markdown scorecard comment to GitHub using the Issues API:
+    POST /repos/{repo}/issues/{pr_number}/comments
+    If the issue/PR does not exist (404), it falls back to creating a new
+    GitHub issue with the scorecard to ensure the integration is visible.
+    """
+    import urllib.request
+    import urllib.error
+    import json
+    import re
+
+    gh_token = config.get("GH_TOKEN")
+    repo = config.get("GITHUB_REPO")
+
+    if not gh_token or not repo:
+        logger.warning("GitHub commenting skipped: GH_TOKEN or GITHUB_REPO not configured in environment.")
+        return False
+
+    match = re.search(r'\d+', pr_id)
+    if not match:
+        logger.warning(f"GitHub commenting skipped: Could not extract numeric PR number from PR ID '{pr_id}'.")
+        return False
+
+    pr_number = match.group(0)
+    url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+    headers = {
+        "Authorization": f"Bearer {gh_token}",
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "WellActually-App",
+        "Content-Type": "application/json"
+    }
+
+    payload = {"body": body}
+    data = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            resp_code = response.getcode()
+            if 200 <= resp_code < 300:
+                logger.info(f"Successfully posted scorecard comment to GitHub PR #{pr_number}.")
+                return True
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            logger.info(f"PR #{pr_number} not found. Creating a new GitHub issue for visibility instead...")
+            create_issue_url = f"https://api.github.com/repos/{repo}/issues"
+            issue_payload = {
+                "title": f"🛡️ Governance Swarm Audit Scorecard: {pr_id}",
+                "body": body
+            }
+            issue_data = json.dumps(issue_payload).encode("utf-8")
+            req_create = urllib.request.Request(create_issue_url, data=issue_data, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req_create, timeout=10) as create_resp:
+                    if 200 <= create_resp.getcode() < 300:
+                        logger.info(f"Successfully created a new GitHub issue containing the audit scorecard.")
+                        return True
+            except Exception as ce:
+                logger.error(f"Failed to create fallback GitHub issue: {ce}")
+        else:
+            logger.error(f"Failed to post comment to GitHub PR #{pr_number}: HTTP {e.code} - {e.reason}")
+    except Exception as e:
+        logger.error(f"Failed to post comment to GitHub PR #{pr_number}: {e}")
+
+    return False
+

@@ -720,6 +720,11 @@ function App() {
   const displayOpenapiCheck = openapiCheck || initialOpenapiCheck;
   const displayRbacCheck = rbacCheck || initialRbacCheck;
 
+  // Display filters for MCP verification checkers
+  const showSchemaCheck = status === "IDLE" || (mcpTargets.table && mcpTargets.table !== "None" && mcpTargets.table !== "null" && mcpTargets.table !== null);
+  const showOpenapiCheck = status === "IDLE" || (mcpTargets.endpoint && mcpTargets.endpoint !== "None" && mcpTargets.endpoint !== "null" && mcpTargets.endpoint !== null);
+  const showRbacCheck = status === "IDLE" || (mcpTargetsFromServer?.rbac_target && mcpTargetsFromServer.rbac_target !== "None" && mcpTargetsFromServer.rbac_target !== "null" && mcpTargetsFromServer.rbac_target !== null);
+
   // Clear stale watchdog anomalies during idle state under dynamic scenario
   const displayWatchdogLogs = (status === "IDLE" && selectedScenario === "dynamic")
     ? []
@@ -886,10 +891,33 @@ function App() {
 
   const getSenderColor = (sender) => {
     if (!sender) return "rgba(255,255,255,0.7)";
-    if (sender.includes("conductor")) return "#3b82f6"; // Orchestrator blue
-    if (sender.includes("coder")) return "#22c55e"; // Coder green
-    if (sender.includes("reviewer-auth")) return "#a855f7"; // Auth SME purple (Featherless)
-    if (sender.includes("reviewer-cart")) return "#eab308"; // Cart SME yellow (AIML)
+    const norm = sender.replace(/-[a-f0-9]{6,}$/i, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    if (norm.includes("conductor")) return "#3b82f6";
+    if (norm.includes("coder")) return "#22c55e";
+    
+    // Find matching active agent dynamically
+    const agent = activeAgents.find(a => {
+      const aNorm = a.name.replace(/-[a-f0-9]{6,}$/i, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      return aNorm === norm;
+    });
+    if (agent) {
+      if (agent.id === "reviewer-0") return "#a855f7";
+      if (agent.id === "reviewer-1") return "#06b6d4";
+      // Fallback based on domain color
+      switch (agent.domain?.toLowerCase()) {
+        case "auth": return "#a855f7";
+        case "billing": return "#f97316";
+        case "database": return "#6366f1";
+        case "security": return "#ef4444";
+        case "cart": return "#eab308";
+        case "api": return "#06b6d4";
+        case "qa": return "#ec4899";
+        case "documentation": return "#10b981";
+      }
+    }
+    
+    if (sender.includes("reviewer-auth")) return "#a855f7";
+    if (sender.includes("reviewer-cart")) return "#eab308";
     return "rgba(255,255,255,0.8)";
   };
 
@@ -1137,6 +1165,66 @@ function App() {
           {/* Agent Swarm Topology Graph */}
           <AgentTopology status={status} activeSender={activeSender} reviewerAuthRole={displayAuthRole} reviewerCartRole={displayCartRole} reviewerAuthDomain={displayAuthDomain} reviewerCartDomain={displayCartDomain} activeAgents={activeAgents} selectedPrDetails={selectedPrDetails} />
 
+          {/* JIT Synthesized Swarm Agents Panel */}
+          {activeAgents && activeAgents.filter(a => a.id.startsWith("reviewer")).length > 0 && (
+            <section className="glass-panel">
+              <h2 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.5rem", color: "#06b6d4" }}>
+                🤖 JIT Synthesized Swarm Agents
+              </h2>
+              <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                {activeAgents.filter(a => a.id.startsWith("reviewer")).map((agent) => {
+                  const isLlama = agent.model && agent.model.includes("Llama");
+                  const modelLabel = isLlama ? "Llama-3.1-70B via Featherless AI" : `${agent.model || "GPT-4o-mini"} via AIML API`;
+                  const borderCol = isLlama ? "rgba(168,85,247,0.3)" : "rgba(6,182,212,0.3)";
+                  const bgCol = isLlama ? "rgba(168,85,247,0.05)" : "rgba(6,182,212,0.05)";
+                  const titleColor = isLlama ? "#c084fc" : "#67e8f9";
+                  return (
+                    <div key={agent.id} style={{
+                      padding: "0.85rem",
+                      borderRadius: "6px",
+                      backgroundColor: bgCol,
+                      border: `1px solid ${borderCol}`,
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+                        <span style={{ fontWeight: "bold", color: titleColor, fontSize: "0.9rem" }}>
+                          {agent.icon} {agent.role}
+                        </span>
+                        <span style={{
+                          fontSize: "0.7rem",
+                          backgroundColor: isLlama ? "rgba(168,85,247,0.15)" : "rgba(6,182,212,0.15)",
+                          color: isLlama ? "#a855f7" : "#06b6d4",
+                          padding: "0.15rem 0.45rem",
+                          borderRadius: "4px",
+                          fontWeight: "500"
+                        }}>
+                          {modelLabel}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "0.75rem", color: "#9ca3af", marginBottom: "0.25rem" }}>
+                        <strong>Domain:</strong> <code style={{ color: "#f472b6" }}>{agent.domain}</code>
+                      </div>
+                      {agent.prompt && (
+                        <div style={{
+                          fontSize: "0.75rem",
+                          color: "#d1d5db",
+                          backgroundColor: "rgba(0,0,0,0.2)",
+                          padding: "0.5rem",
+                          borderRadius: "4px",
+                          fontFamily: "monospace",
+                          whiteSpace: "pre-wrap",
+                          marginTop: "0.4rem",
+                          border: "1px solid rgba(255,255,255,0.05)"
+                        }}>
+                          {agent.prompt}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           {/* PR Information & Triage card */}
           <section className={`glass-panel ${status === "PENDING_HUMAN_APPROVAL" ? "glow-red" : ""}`}>
             <h2 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.5rem", color: "#06b6d4" }}>
@@ -1253,78 +1341,86 @@ function App() {
           </section>
 
           {/* Static Context Checker Panel */}
-          <section className="glass-panel">
-            <h2 style={{ margin: "0 0 1.25rem 0", fontSize: "1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.5rem", color: "#06b6d4" }}>
-              Static Bounded Context (MCP) checkers
-            </h2>
+          {(showSchemaCheck || showOpenapiCheck || showRbacCheck) && (
+            <section className="glass-panel">
+              <h2 style={{ margin: "0 0 1.25rem 0", fontSize: "1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.5rem", color: "#06b6d4" }}>
+                Static Bounded Context (MCP) checkers
+              </h2>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              {/* Postgres check */}
-              <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
-                <div style={{ fontSize: "1.5rem" }}>
-                  {status === "IDLE" ? "⚪" : displaySchemaCheck === null ? "⏳" : displaySchemaCheck.compliant ? "✅" : "❌"}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displaySchemaCheck && !displaySchemaCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
-                    PostgreSQL Bounded Context Check
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
-                    Target: Postgres Table <code>{mcpTargets.table}</code>
-                  </div>
-                  {displaySchemaCheck && !displaySchemaCheck.compliant && (
-                    <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
-                      {displaySchemaCheck.violations.join("\n")}
+              <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                {/* Postgres check */}
+                {showSchemaCheck && (
+                  <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
+                    <div style={{ fontSize: "1.5rem" }}>
+                      {status === "IDLE" ? "⚪" : displaySchemaCheck === null ? "⏳" : displaySchemaCheck.compliant ? "✅" : "❌"}
                     </div>
-                  )}
-                </div>
-              </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displaySchemaCheck && !displaySchemaCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
+                        PostgreSQL Bounded Context Check
+                      </div>
+                      <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
+                        Target: Postgres Table <code>{mcpTargets.table}</code>
+                      </div>
+                      {displaySchemaCheck && !displaySchemaCheck.compliant && (
+                        <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
+                          {displaySchemaCheck.violations.join("\n")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
-              {/* OpenAPI check */}
-              <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
-                <div style={{ fontSize: "1.5rem" }}>
-                  {status === "IDLE" ? "⚪" : displayOpenapiCheck === null ? "⏳" : displayOpenapiCheck.compliant ? "✅" : "❌"}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displayOpenapiCheck && !displayOpenapiCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
-                    OpenAPI contract check
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
-                    Target: REST Endpoint <code>{mcpTargets.endpoint}</code>
-                  </div>
-                  {displayOpenapiCheck && !displayOpenapiCheck.compliant && (
-                    <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
-                      {displayOpenapiCheck.violations.join("\n")}
+                {/* OpenAPI check */}
+                {showOpenapiCheck && (
+                  <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
+                    <div style={{ fontSize: "1.5rem" }}>
+                      {status === "IDLE" ? "⚪" : displayOpenapiCheck === null ? "⏳" : displayOpenapiCheck.compliant ? "✅" : "❌"}
                     </div>
-                  )}
-                </div>
-              </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displayOpenapiCheck && !displayOpenapiCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
+                        OpenAPI contract check
+                      </div>
+                      <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
+                        Target: REST Endpoint <code>{mcpTargets.endpoint}</code>
+                      </div>
+                      {displayOpenapiCheck && !displayOpenapiCheck.compliant && (
+                        <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
+                          {displayOpenapiCheck.violations.join("\n")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
-              {/* RBAC Policy check */}
-              <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
-                <div style={{ fontSize: "1.5rem" }}>
-                  {status === "IDLE" ? "⚪" : displayRbacCheck === null ? "⏳" : displayRbacCheck.compliant ? "✅" : "❌"}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displayRbacCheck && !displayRbacCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
-                    RBAC Access Policy Check
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
-                    Target: {status === "IDLE" && selectedScenario === "dynamic"
-                      ? <code>Pending PR analysis</code>
-                      : mcpTargetsFromServer?.rbac_target 
-                        ? <><span>Sensitive Column </span><code>{mcpTargetsFromServer.rbac_target}</code></>
-                        : <><span>Access Policy Boundaries — </span><code>{mcpTargets.table}</code></>
-                    }
-                  </div>
-                  {displayRbacCheck && !displayRbacCheck.compliant && (
-                    <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
-                      {displayRbacCheck.violations.join("\n")}
+                {/* RBAC Policy check */}
+                {showRbacCheck && (
+                  <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
+                    <div style={{ fontSize: "1.5rem" }}>
+                      {status === "IDLE" ? "⚪" : displayRbacCheck === null ? "⏳" : displayRbacCheck.compliant ? "✅" : "❌"}
                     </div>
-                  )}
-                </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displayRbacCheck && !displayRbacCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
+                        RBAC Access Policy Check
+                      </div>
+                      <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
+                        Target: {status === "IDLE" && selectedScenario === "dynamic"
+                          ? <code>Pending PR analysis</code>
+                          : mcpTargetsFromServer?.rbac_target 
+                            ? <><span>Sensitive Column </span><code>{mcpTargetsFromServer.rbac_target}</code></>
+                            : <><span>Access Policy Boundaries — </span><code>{mcpTargets.table}</code></>
+                        }
+                      </div>
+                      {displayRbacCheck && !displayRbacCheck.compliant && (
+                        <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
+                          {displayRbacCheck.violations.join("\n")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          </section>
+            </section>
+          )}
 
           {/* SQL AST Visualizer */}
           <SqlAstVisualizer checkedColumns={displaySchemaCheck?.checked_columns || []} />
@@ -1660,31 +1756,70 @@ function App() {
                               {headerText}
                             </span>
                             <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                              {evt.sender.includes("reviewer-auth") && (
-                                <>
-                                  <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(168,85,247,0.15)", color: "#a855f7", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
-                                    Featherless: Llama-3.1-70B
-                                  </span>
-                                  <span style={{ fontSize: "0.65rem", backgroundColor: "rgba(168,85,247,0.08)", color: "#c084fc", padding: "0.1rem 0.4rem", borderRadius: "4px", border: "1px solid rgba(168,85,247,0.2)" }}>
-                                    Domain: {reviewerAuthDomain === "auth" ? "Auth & Schema" : reviewerAuthDomain.charAt(0).toUpperCase() + reviewerAuthDomain.slice(1)}
-                                  </span>
-                                </>
-                              )}
-                              {evt.sender.includes("reviewer-cart") && (
-                                <>
-                                  <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
-                                    AIML: GPT-4o-mini
-                                  </span>
-                                  <span style={{ fontSize: "0.65rem", backgroundColor: "rgba(6,182,212,0.08)", color: "#67e8f9", padding: "0.1rem 0.4rem", borderRadius: "4px", border: "1px solid rgba(6,182,212,0.2)" }}>
-                                    Domain: {reviewerCartDomain === "cart" ? "API Contract" : reviewerCartDomain.charAt(0).toUpperCase() + reviewerCartDomain.slice(1)}
-                                  </span>
-                                </>
-                              )}
-                              {(evt.sender.includes("coder") || evt.sender.includes("conductor")) && evt.role !== "SYSTEM" && (
-                                <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
-                                  AIML: GPT-4o-mini
-                                </span>
-                              )}
+                              {(() => {
+                                const norm = normalizeName(evt.sender);
+                                const agent = activeAgents.find(a => normalizeName(a.name) === norm);
+                                if (agent && agent.id.startsWith("reviewer")) {
+                                  const isLlama = agent.model && agent.model.includes("Llama");
+                                  const modelLabel = isLlama ? "Featherless: Llama-3.1-70B" : `AIML: ${agent.model || "GPT-4o-mini"}`;
+                                  const badgeColor = isLlama ? "#a855f7" : "#06b6d4";
+                                  const bgAlpha = isLlama ? "rgba(168,85,247,0.15)" : "rgba(6,182,212,0.15)";
+                                  const borderBg = isLlama ? "rgba(168,85,247,0.08)" : "rgba(6,182,212,0.08)";
+                                  const textSubColor = isLlama ? "#c084fc" : "#67e8f9";
+                                  const borderCol = isLlama ? "rgba(168,85,247,0.2)" : "rgba(6,182,212,0.2)";
+                                  
+                                  return (
+                                    <>
+                                      <span style={{ fontSize: "0.7rem", backgroundColor: bgAlpha, color: badgeColor, padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
+                                        {modelLabel}
+                                      </span>
+                                      <span style={{ fontSize: "0.65rem", backgroundColor: borderBg, color: textSubColor, padding: "0.1rem 0.4rem", borderRadius: "4px", border: `1px solid ${borderCol}` }}>
+                                        Domain: {agent.domain ? agent.domain.charAt(0).toUpperCase() + agent.domain.slice(1) : "Unknown"}
+                                      </span>
+                                    </>
+                                  );
+                                } else if (agent && (agent.id === "conductor" || agent.id === "coder") && evt.role !== "SYSTEM") {
+                                  return (
+                                    <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
+                                      AIML: {agent.model || "GPT-4o-mini"}
+                                    </span>
+                                  );
+                                } else {
+                                  // Fallback for static scenario values when activeAgents is empty or matching fails
+                                  if (evt.sender.includes("reviewer-auth")) {
+                                    return (
+                                      <>
+                                        <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(168,85,247,0.15)", color: "#a855f7", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
+                                          Featherless: Llama-3.1-70B
+                                        </span>
+                                        <span style={{ fontSize: "0.65rem", backgroundColor: "rgba(168,85,247,0.08)", color: "#c084fc", padding: "0.1rem 0.4rem", borderRadius: "4px", border: "1px solid rgba(168,85,247,0.2)" }}>
+                                          Domain: {reviewerAuthDomain === "auth" ? "Auth & Schema" : reviewerAuthDomain.charAt(0).toUpperCase() + reviewerAuthDomain.slice(1)}
+                                        </span>
+                                      </>
+                                    );
+                                  }
+                                  if (evt.sender.includes("reviewer-cart")) {
+                                    return (
+                                      <>
+                                        <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
+                                          AIML: GPT-4o-mini
+                                        </span>
+                                        <span style={{ fontSize: "0.65rem", backgroundColor: "rgba(6,182,212,0.08)", color: "#67e8f9", padding: "0.1rem 0.4rem", borderRadius: "4px", border: "1px solid rgba(6,182,212,0.2)" }}>
+                                          Domain: {reviewerCartDomain === "cart" ? "API Contract" : reviewerCartDomain.charAt(0).toUpperCase() + reviewerCartDomain.slice(1)}
+                                        </span>
+                                      </>
+                                    );
+                                  }
+                                  if ((evt.sender.includes("coder") || evt.sender.includes("conductor")) && evt.role !== "SYSTEM") {
+                                    return (
+                                      <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
+                                        AIML: GPT-4o-mini
+                                      </span>
+                                    );
+                                  }
+                                }
+                                return null;
+                              })()}
                             </div>
                           </div>
                           

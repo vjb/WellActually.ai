@@ -1092,6 +1092,88 @@ async def test_initialize_session_room_limit_fallback(mock_rest_client):
     assert mock_agent_client.agent_api_chats.list_agent_chats.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_analyze_pr_for_swarm_fallback():
+    """Verifies that analyze_pr_for_swarm falls back to heuristic default when client is None."""
+    from src.server import analyze_pr_for_swarm
+    import src.swarm
+    
+    orig_client = src.swarm.client
+    src.swarm.client = None
+    
+    try:
+        res = await analyze_pr_for_swarm(
+            pr_diff="diff --git a/src/billing/spending.py b/src/billing/spending.py",
+            pr_title="Implement spending report",
+            diff_files=["src/billing/spending.py"]
+        )
+        assert "reviewers" in res
+        assert len(res["reviewers"]) == 2
+        assert res["reviewers"][0]["domain"] == "billing"
+        assert res["mcp_targets"]["schema_table"] == "No database tables detected"
+    finally:
+        src.swarm.client = orig_client
+
+
+@pytest.mark.asyncio
+async def test_analyze_pr_for_swarm_with_mock_llm():
+    """Verifies that analyze_pr_for_swarm parses valid LLM response JSON."""
+    from src.server import analyze_pr_for_swarm
+    import src.swarm
+    from unittest.mock import MagicMock
+    
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_choice = MagicMock()
+    mock_message = MagicMock()
+    
+    mock_message.content = """
+    {
+      "reviewers": [
+        {
+          "role": "Custom Security SME",
+          "domain": "security",
+          "system_prompt": "Audit for security",
+          "model": "unsloth/Meta-Llama-3.1-70B-Instruct"
+        },
+        {
+          "role": "Custom QA SME",
+          "domain": "qa",
+          "system_prompt": "Audit for tests",
+          "model": "gpt-4o-mini"
+        }
+      ],
+      "additional_files": ["config.json"],
+      "mcp_targets": {
+        "schema_table": "users",
+        "api_endpoint": "/api/v1/users",
+        "rbac_target": "users.role"
+      }
+    }
+    """
+    mock_choice.message = mock_message
+    mock_resp.choices = [mock_choice]
+    mock_client.chat.completions.create = MagicMock(return_value=mock_resp)
+    
+    orig_client = src.swarm.client
+    src.swarm.client = mock_client
+    
+    try:
+        res = await analyze_pr_for_swarm(
+            pr_diff="some diff",
+            pr_title="some title",
+            diff_files=["some_file.py"]
+        )
+        assert "reviewers" in res
+        assert len(res["reviewers"]) == 2
+        assert res["reviewers"][0]["role"] == "Custom Security SME"
+        assert res["reviewers"][1]["domain"] == "qa"
+        assert res["additional_files"] == ["config.json"]
+        assert res["mcp_targets"]["schema_table"] == "users"
+    finally:
+        src.swarm.client = orig_client
+
+
 
 
 

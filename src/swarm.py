@@ -246,21 +246,24 @@ class ReviewerAgent(Agent):
         ),
     }
 
-    def __init__(self, role: str, name_suffix: str = "", model: str = "gpt-4o-mini", domain: str = "auth"):
+    def __init__(self, role: str, name_suffix: str = "", model: str = "gpt-4o-mini", domain: str = "auth", system_prompt_override: Optional[str] = None):
         name = f"reviewer-{role.replace(' ', '_').replace('&', 'and').lower()}-{name_suffix}" if name_suffix else f"reviewer-{role.replace(' ', '_').replace('&', 'and').lower()}"
-        domain_ctx = self.DOMAIN_CONTEXT.get(domain, "")
-        system_prompt = (
-            f"You are the {role} Agent. "
-            "Your job is to act as a strict codebase validator and SME.\n"
-            "Guidelines:\n"
-            "1. You review proposals submitted by the Lead Coder.\n"
-            "2. Your review must be dynamic and based on the provided MCP compliance logs (PostgreSQL schema and OpenAPI contract check logs).\n"
-            "3. If there are violations in the compliance checks, you MUST reject the code. "
-            "You MUST output '❌ REVIEW FAILED:' at the very start of your message and detail the specific violations.\n"
-            "4. If and only if there are zero compliance violations in your domain, output '✓ REVIEW PASSED:' "
-            "at the start of your message.\n"
-            f"5. {domain_ctx}"
-        )
+        if system_prompt_override:
+            system_prompt = system_prompt_override
+        else:
+            domain_ctx = self.DOMAIN_CONTEXT.get(domain, "")
+            system_prompt = (
+                f"You are the {role} Agent. "
+                "Your job is to act as a strict codebase validator and SME.\n"
+                "Guidelines:\n"
+                "1. You review proposals submitted by the Lead Coder.\n"
+                "2. Your review must be dynamic and based on the provided MCP compliance logs (PostgreSQL schema and OpenAPI contract check logs).\n"
+                "3. If there are violations in the compliance checks, you MUST reject the code. "
+                "You MUST output '❌ REVIEW FAILED:' at the very start of your message and detail the specific violations.\n"
+                "4. If and only if there are zero compliance violations in your domain, output '✓ REVIEW PASSED:' "
+                "at the start of your message.\n"
+                f"5. {domain_ctx}"
+            )
         self.domain = domain
         super().__init__(name=name, role=role, system_prompt=system_prompt, model=model)
 
@@ -365,11 +368,22 @@ class SwarmSession:
         logger.info(f"[BAND REST] Initializing Human Rest Client...")
         self.human_client = thenvoi_rest.AsyncRestClient(api_key=self.human_key, base_url=self.base_url)
 
-        # Query current registered agents count to determine if we should reuse pre-registered keys
+        # Query current registered agents count
         logger.debug(f"[BAND REST] Querying current agent count...")
         existing_agents_resp = await self.human_client.human_api_agents.list_my_agents()
         existing_agents = existing_agents_resp.data
         logger.info(f"[BAND REST] Found {len(existing_agents)} existing agents.")
+
+        # Zero-Trust Slate Clearance to prevent exceeding the 10-agent platform limit
+        if existing_agents:
+            logger.info(f"[BAND REST] Clearing out {len(existing_agents)} existing agents to start with a clean slate...")
+            for agent_info in existing_agents:
+                try:
+                    await self.human_client.human_api_agents.delete_my_agent(id=agent_info.id)
+                    logger.info(f"[BAND REST] Deleted stale agent {agent_info.name} (ID: {agent_info.id}).")
+                except Exception as e:
+                    logger.error(f"[BAND REST] Failed to delete stale agent {agent_info.name}: {e}")
+            existing_agents = []
 
         if len(existing_agents) >= 9:
             logger.info(f"[BAND REST] Agent limit (10) nearly reached. Reusing pre-registered agents...")
@@ -686,6 +700,7 @@ class SwarmSession:
         """
         Tries to delete registered agents. Prints any deletion restrictions.
         """
+        # Always clean up dynamic JIT agents on completion/cancellation
         if self.reused:
             logger.info("[BAND REST] Reused agents in execution. Preserving credentials/IDs for subsequent runs.")
             return

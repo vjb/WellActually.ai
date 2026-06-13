@@ -564,6 +564,118 @@ def get_consent_event(pr_id: str) -> asyncio.Event:
 class ConsentRequest(BaseModel):
     approve: bool
 
+async def analyze_pr_for_swarm(pr_diff: str, pr_title: str, diff_files: List[str]) -> Dict[str, Any]:
+    from src.swarm import client
+    import json
+    
+    # Heuristic fallback definition
+    # If the API call fails or there is no client, we fallback to heuristic analysis.
+    fallback_reviewers = []
+    pred_list = predict_reviewer_identities_list(diff_files)
+    if len(pred_list) > 2:
+        pred_list = pred_list[:2]
+    elif len(pred_list) < 2:
+        defaults = [
+            {"domain": "architecture", "role": "Code Architecture SME"},
+            {"domain": "documentation", "role": "Technical Writing SME"}
+        ]
+        for d in defaults:
+            if len(pred_list) >= 2:
+                break
+            if not any(x["domain"] == d["domain"] for x in pred_list):
+                pred_list.append(d)
+        while len(pred_list) < 2:
+            pred_list.append({"domain": "architecture", "role": "Code Architecture SME"})
+            
+    models = ["unsloth/Meta-Llama-3.1-70B-Instruct", "gpt-4o-mini"]
+    for idx, info in enumerate(pred_list):
+        fallback_reviewers.append({
+            "role": info["role"],
+            "domain": info["domain"],
+            "system_prompt": f"You are the {info['role']}. Focus on verifying compliance for the {info['domain']} domain. Make sure changes follow standard project policies.",
+            "model": models[idx % len(models)]
+        })
+        
+    fallback_mcp = detect_mcp_targets(diff_files, {})
+    
+    fallback_res = {
+        "reviewers": fallback_reviewers,
+        "additional_files": ["mock_infrastructure/postgres_schema.sql", "mock_infrastructure/openapi_contract.json", "mock_infrastructure/CODEOWNERS"],
+        "mcp_targets": {
+            "schema_table": fallback_mcp.get("schema_table"),
+            "api_endpoint": fallback_mcp.get("api_endpoint"),
+            "rbac_target": fallback_mcp.get("rbac_target")
+        }
+    }
+    
+    if not client:
+        logger.warning("[JIT ANALYSIS] OpenAI client is not initialized. Using heuristic fallback.")
+        return fallback_res
+        
+    prompt = f"""
+Analyze the following Pull Request details and diff:
+Title: {pr_title}
+Files Touched: {json.dumps(diff_files)}
+
+PR Diff:
+{pr_diff}
+
+Synthesize a JIT (Just-in-Time) compliance swarm review configuration. Return ONLY a JSON object (no markdown, no backticks, no comments, just valid JSON).
+The JSON object must have exactly the following structure:
+{{
+  "reviewers": [
+    {{
+      "role": "Role Title (e.g., Cryptographic Security SME, Regulatory Billing SME, API Schema Auditor)",
+      "domain": "Domain key (one of: auth, billing, database, api, qa, documentation, security, architecture)",
+      "system_prompt": "Tailored prompt instructing this agent on what rules and constraints to audit in this specific PR diff",
+      "model": "unsloth/Meta-Llama-3.1-70B-Instruct" (for high stakes domain like billing/security/auth) or "gpt-4o-mini" (for other areas)
+    }},
+    {{
+      "role": "Second Role Title",
+      "domain": "Second Domain key",
+      "system_prompt": "Second tailored prompt",
+      "model": "gpt-4o-mini" or "unsloth/Meta-Llama-3.1-70B-Instruct"
+    }}
+  ],
+  "additional_files": [
+    "Any repository files that would be helpful to fetch as additional context for this PR (e.g., 'mock_infrastructure/postgres_schema.sql', 'mock_infrastructure/openapi_contract.json', 'mock_infrastructure/CODEOWNERS')"
+  ],
+  "mcp_targets": {{
+    "schema_table": "Postgres table name referenced in this PR (if any, e.g., 'billing_profiles', 'cart_items')",
+    "api_endpoint": "REST API endpoint path referenced in this PR (if any, e.g., '/api/v1/billing/spending')",
+    "rbac_target": "Sensitive column to enforce RBAC check on (if any, e.g., 'billing_profiles.spending_limit_usd')"
+  }}
+}}
+"""
+    try:
+        messages = [
+            {"role": "system", "content": "You are a code governance orchestrator. You analyze PRs and generate reviewer swarms. You must respond with raw JSON only. Do not format the response using markdown code blocks."},
+            {"role": "user", "content": prompt}
+        ]
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=1500,
+            temperature=0.2,
+            timeout=15.0
+        )
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```"):
+            first_nl = content.find("\n")
+            last_code = content.rfind("```")
+            if first_nl != -1 and last_code != -1:
+                content = content[first_nl:last_code].strip()
+        
+        data = json.loads(content)
+        if "reviewers" not in data or not isinstance(data["reviewers"], list) or len(data["reviewers"]) == 0:
+            raise ValueError("Invalid reviewers format in LLM response")
+        return data
+    except Exception as e:
+        logger.error(f"[JIT ANALYSIS] LLM Swarm Synthesis failed: {e}. Falling back to heuristic defaults.")
+        return fallback_res
+
+
 async def run_simulation_task():
     task_generation = state.generation  # Capture to detect if state was reset during our run
     
@@ -601,8 +713,32 @@ async def run_simulation_task():
         state.pr_title = "Refactor checkout flow database queries"
         state.pr_branch = "codeband/branch-pr-217" if state.pr_number == 217 else "codeband/branch-pr-2"
         
+    jit_config = None
     if state.scenario == "dynamic":
-        state.mcp_targets = detect_mcp_targets(state.diff_files, state.loaded_file_contents)
+        state.add_event("SYSTEM: Conductor analyzing PR details & diff for JIT Swarm Synthesis...", level="info")
+        jit_config = await analyze_pr_for_swarm(state.pr_diff or "", state.pr_title or "", state.diff_files)
+        
+        # Load additional context files requested by LLM
+        additional_files = jit_config.get("additional_files", [])
+        if additional_files:
+            state.add_event(f"SYSTEM: Conductor identified additional context files to retrieve: {additional_files}", level="info")
+            loaded_files = dict(state.loaded_file_contents) if state.loaded_file_contents else {}
+            for filepath in additional_files:
+                if filepath not in loaded_files:
+                    file_content = await get_github_file_content(state.repo or "vjb/WellActually.ai", filepath)
+                    if file_content:
+                        loaded_files[filepath] = file_content
+                        state.add_event(f"SYSTEM: Successfully retrieved context file: {filepath}", level="info")
+            state.loaded_file_contents = loaded_files
+            
+        # Detect and merge MCP targets
+        h_mcp = detect_mcp_targets(state.diff_files, state.loaded_file_contents)
+        llm_mcp = jit_config.get("mcp_targets", {})
+        state.mcp_targets = {
+            "schema_table": llm_mcp.get("schema_table") or h_mcp.get("schema_table"),
+            "api_endpoint": llm_mcp.get("api_endpoint") or h_mcp.get("api_endpoint"),
+            "rbac_target": llm_mcp.get("rbac_target") or h_mcp.get("rbac_target")
+        }
         state.save_state()
         
     state.add_event("Modified files: " + str(state.diff_files), level="info")
@@ -667,10 +803,29 @@ async def run_simulation_task():
         coder = CoderAgent(name_suffix=unique_suffix, model="gpt-4o-mini", scenario=state.scenario)
         
     if state.scenario == "dynamic":
-        reviewers = generate_dynamic_reviewers(state.diff_files, unique_suffix, limit=None)
-        state.add_event("SYSTEM: Analyzing files to dynamically invent reviewer agent identities...")
-        for r in reviewers:
-            state.add_event(f"SYSTEM: Created agent '{r.role}' to verify compliance for files in domain '{r.domain}'.")
+        if jit_config and "reviewers" in jit_config:
+            reviewers = []
+            state.add_event("SYSTEM: Initializing synthesized JIT reviewer agents...", level="info")
+            for idx, r_def in enumerate(jit_config["reviewers"]):
+                role = r_def.get("role", "Code Auditor")
+                domain = r_def.get("domain", "architecture")
+                system_prompt_override = r_def.get("system_prompt", "")
+                model = r_def.get("model", "gpt-4o-mini")
+                
+                r_agent = ReviewerAgent(
+                    role=role,
+                    name_suffix=unique_suffix,
+                    model=model,
+                    domain=domain,
+                    system_prompt_override=system_prompt_override
+                )
+                reviewers.append(r_agent)
+                state.add_event(f"SYSTEM: Created synthesized agent '{role}' on model '{model}' for domain '{domain}'.", level="info")
+        else:
+            reviewers = generate_dynamic_reviewers(state.diff_files, unique_suffix, limit=None)
+            state.add_event("SYSTEM: Analyzing files to dynamically invent reviewer agent identities (fallback)...")
+            for r in reviewers:
+                state.add_event(f"SYSTEM: Created agent '{r.role}' to verify compliance for files in domain '{r.domain}'.")
     else:
         reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-70B-Instruct", domain="auth")
         reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
@@ -691,14 +846,16 @@ async def run_simulation_task():
             "name": conductor.name,
             "role": conductor.role,
             "domain": "system",
-            "icon": "👑"
+            "icon": "👑",
+            "model": conductor.model
         },
         {
             "id": "coder",
             "name": coder.name,
             "role": coder.role,
             "domain": "system",
-            "icon": "💻"
+            "icon": "💻",
+            "model": coder.model
         }
     ]
     for idx, r in enumerate(reviewers):
@@ -707,7 +864,9 @@ async def run_simulation_task():
             "name": r.name,
             "role": r.role,
             "domain": r.domain,
-            "icon": get_domain_icon_str(r.domain)
+            "icon": get_domain_icon_str(r.domain),
+            "model": r.model,
+            "prompt": r.system_prompt
         })
         
     state.save_state()
@@ -988,6 +1147,7 @@ async def get_github_file_content(repo: str, filepath: str) -> str:
     import urllib.error
     import json
     import base64
+    import os
     from src.config import config
     
     gh_token = config.get("GH_TOKEN")
@@ -1016,9 +1176,20 @@ async def get_github_file_content(repo: str, filepath: str) -> str:
             raise e
             
     try:
-        return await asyncio.to_thread(fetch)
+        content = await asyncio.to_thread(fetch)
+        if not content and os.path.exists(filepath):
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+        return content
     except Exception as e:
         logger.warning(f"Failed to fetch file content for {filepath}: {e}")
+        # fallback to local
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
         return ""
 
 

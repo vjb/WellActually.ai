@@ -81,12 +81,12 @@ Rich analytics showing:
 
 ---
 
-## 🛡️ Zero-Trust Compliance Gate
+## 🛡️ Zero-Trust Security Scanner
 
-Before the swarm launches, a **Zero-Trust triage scanner** checks the PR against CODEOWNERS rules:
-- If the PR touches high-stakes paths (auth, billing, database schemas), the pipeline **halts**
-- A human operator must **explicitly approve** before agents are deployed
-- This is real human-in-the-loop governance — not a rubber stamp
+Before the swarm launches, a **Zero-Trust triage scanner** automatically audits the PR:
+- Identifies high-stakes code paths (e.g., auth, billing, database schemas) and maps required validation contexts to the JIT agents.
+- Operates fully autonomously, deploying the swarm without blocking pipeline velocity.
+- Escalates to a human operator *only* if the adversarial debate loop reaches a consensus deadlock.
 
 ---
 

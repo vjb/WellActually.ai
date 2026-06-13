@@ -866,6 +866,7 @@ The JSON object must have exactly the following structure:
             client.chat.completions.create,
             model="gpt-4o-mini",
             messages=messages,
+            response_format={"type": "json_object"},
             max_tokens=1500,
             temperature=0.2,
             timeout=15.0

@@ -35,9 +35,7 @@ flowchart TD
     classDef success fill:#064e3b,stroke:#059669,color:#ecfdf5,stroke-width:1px;
     
     A[🎯 PR Opened]:::default --> B{🛡️ Zero-Trust Triage}:::default
-    B -->|High-Stakes Code Path| C[⌛ Human Approval Gate]:::warning
-    B -->|Clean / Safe Paths| D[🧠 JIT Swarm Synthesis]:::accent
-    C -->|Override & Approve| D
+    B -->|JIT Swarm Synthesis| D[🧠 JIT Swarm Synthesis]:::accent
     D -->|Synthesize Custom Persona system_prompt| E[🔗 Band.ai Chat Room Deployment]:::default
     E --> F[⚔️ Adversarial Consensus Debate]:::default
     F -->|Round 1-2 Review Passed| G[✓ Swarm Consensus Approved]:::success
@@ -183,7 +181,6 @@ python -m pytest tests/test_swarm.py -v
    - Enter a repository (e.g. `vjb/WellActually.ai`)
    - Select an open PR from the dropdown
    - Click **Launch JIT Swarm**
-   - If Zero-Trust halts the pipeline, click **Approve** to authorize
    - Watch agents synthesize, deploy, and debate in real time
    - See the verdict scorecard when consensus is reached
 
@@ -197,7 +194,7 @@ python -m pytest tests/test_swarm.py -v
 | Model diversity | Single model | **Multi-LLM** (Llama-70B + GPT-4o) |
 | Review scope | Generic checklist | **Domain-specific** adversarial mandate |
 | Governance | Post-merge scanning | **Pre-merge** Zero-Trust gate |
-| Human oversight | Optional | **Mandatory** for high-stakes paths |
+| Human oversight | Optional | **Mandatory** on consensus deadlock |
 | Agent lifecycle | Persistent | **Ephemeral** — synthesized per review |
 
 ---

@@ -54,6 +54,9 @@ def format_scorecard_comment(state) -> str:
                 f"- **Round {r.get('round')}:** {r.get('outcome', 'unknown').upper()}"
                 for r in round_hist
             )
+        summary_text = state.debate_summary.get("summary_text")
+        if summary_text:
+            debate_rounds_info += f"\n\n#### 📝 Swarm Debate Executive Summary\n{summary_text}"
 
     triage_info = "Status: OK"
     if state.triage_result:
@@ -64,10 +67,29 @@ def format_scorecard_comment(state) -> str:
         else:
             triage_info = f"✅ Clean triage. Status: {triage_status}"
 
-    auth_role = getattr(state, "reviewer_auth_role", "Auth & Fraud SME")
-    cart_role = getattr(state, "reviewer_cart_role", "Cart SME")
-    auth_handle = f"@reviewer-{auth_role.replace(' ', '_').replace('&', 'and').lower()}"
-    cart_handle = f"@reviewer-{cart_role.replace(' ', '_').replace('&', 'and').lower()}"
+    reviewer_lines = []
+    reviewer_lines.append("- **👑 Conductor Orchestrator** (`@conductor`): Routed via **AIML API** (GPT-4o-mini). Orchestrates Task Room lifecycle.")
+    reviewer_lines.append("- **💻 Lead Coder** (`@coder`): Routed via **AIML API** (GPT-4o-mini). Proposes and refactors implementation draft.")
+    
+    r_idx = 0
+    active_agents = getattr(state, "active_agents", []) or []
+    for agent in active_agents:
+        agent_id = agent.get("id", "")
+        if agent_id.startswith("reviewer"):
+            role = agent.get("role", "Code Auditor")
+            handle = f"@reviewer-{role.replace(' ', '_').replace('&', 'and').lower()}"
+            icon = agent.get("icon", "🤖")
+            model = agent.get("model", "gpt-4o-mini")
+            
+            if "Llama" in model:
+                model_route = f"Featherless AI ({model})"
+            else:
+                model_route = f"AIML API ({model})"
+                
+            reviewer_lines.append(f"- **{icon} Reviewer {chr(65+r_idx)} ({role})** (`{handle}`): Routed via **{model_route}**.")
+            r_idx += 1
+            
+    reviewer_text = "\n".join(reviewer_lines)
     room_id = getattr(state, "room_id", None)
     room_line = f"- **Band.ai Task Room ID:** `{room_id}`" if room_id else ""
 
@@ -81,10 +103,7 @@ def format_scorecard_comment(state) -> str:
 {room_line}
 
 ### 🤖 Band.ai Swarm Topology & Agent Identities
-- **👑 Conductor Orchestrator** (`@conductor`): Routed via **AIML API** (GPT-4o-mini). Orchestrates Task Room lifecycle.
-- **💻 Lead Coder** (`@coder`): Routed via **AIML API** (GPT-4o-mini). Proposes and refactors implementation draft.
-- **💳 Reviewer A ({auth_role})** (`{auth_handle}`): Routed via **Featherless AI** (Unsloth Llama-3.1-70B). Audits database schema & RBAC policies using PostgreSQL verifier.
-- **🏗️ Reviewer B ({cart_role})** (`{cart_handle}`): Routed via **AIML API** (GPT-4o-mini). Audits REST routes & API payloads using OpenAPI contract verifier.
+{reviewer_text}
 
 ### 🔒 Triage Compliance Results
 {triage_info}
@@ -114,25 +133,7 @@ def format_scorecard_comment(state) -> str:
     return body
 
 
-# ── Bug 1 fix: contextual JIRA event based on PR title/files ──────────
-def generate_jira_context(pr_title: str, diff_files: List[str]) -> str:
-    """Generate a contextual JIRA ticket reference based on the PR's domain."""
-    title_lower = (pr_title or "").lower()
-    files_str = " ".join(f.lower() for f in diff_files)
-    combined = f"{title_lower} {files_str}"
 
-    if "billing" in combined or "spending" in combined:
-        return 'SEC-842: "Implement spending report fetcher. MUST use standard rbac.check_access() middleware."'
-    elif "auth" in combined or "oauth" in combined or "token" in combined or "login" in combined or "session" in combined:
-        return 'SEC-901: "Harden OAuth2 token lifecycle. Tokens MUST be hashed before storage; revoke requires ownership check."'
-    elif "checkout" in combined or "cart" in combined:
-        return 'CART-315: "Refactor checkout flow. cart_id MUST be validated against OpenAPI contract before payment dispatch."'
-    elif "gdpr" in combined or "export" in combined or "user_data" in combined or "user_queries" in combined or "permissions" in combined:
-        return 'PRIV-208: "GDPR data export endpoint. Ownership MUST be verified; PII columns MUST be filtered from export payload."'
-    elif "admin" in combined or "metrics" in combined or "dashboard" in combined:
-        return 'OPS-417: "Admin metrics dashboard. Queries MUST use LIMIT clauses; PII MUST NOT leak in aggregation responses."'
-    else:
-        return f'ENG-100: "Review changes in {diff_files[0] if diff_files else "unknown"}. Ensure compliance with project standards."'
 
 
 # ── Bug 2 fix: contextual watchdog anomaly based on PR domain ─────────
@@ -782,8 +783,8 @@ async def analyze_pr_for_swarm(pr_diff: str, pr_title: str, diff_files: List[str
     # If the API call fails or there is no client, we fallback to heuristic analysis.
     fallback_reviewers = []
     pred_list = predict_reviewer_identities_list(diff_files)
-    if len(pred_list) > 2:
-        pred_list = pred_list[:2]
+    if len(pred_list) > 4:
+        pred_list = pred_list[:4]
     elif len(pred_list) < 2:
         defaults = [
             {"domain": "architecture", "role": "Code Architecture SME"},
@@ -830,7 +831,8 @@ Files Touched: {json.dumps(diff_files)}
 PR Diff:
 {pr_diff}
 
-Synthesize a JIT (Just-in-Time) compliance swarm review configuration. Return ONLY a JSON object (no markdown, no backticks, no comments, just valid JSON).
+Synthesize a JIT (Just-in-Time) compliance swarm review configuration. Identify all relevant domains affected by this PR (e.g. database schema/SQL compliance, API contracts/payloads, authentication/security compliance, QA/testing, documentation, etc.) and generate a dedicated reviewer agent for each domain (generate between 2 to 4 reviewer agents depending on the size and complexity of the PR).
+Return ONLY a JSON object (no markdown, no backticks, no comments, just valid JSON).
 The JSON object must have exactly the following structure:
 {{
   "reviewers": [
@@ -838,14 +840,9 @@ The JSON object must have exactly the following structure:
       "role": "Role Title (e.g., Cryptographic Security SME, Regulatory Billing SME, API Schema Auditor)",
       "domain": "Domain key (one of: auth, billing, database, api, qa, documentation, security, architecture)",
       "system_prompt": "Tailored prompt instructing this agent on what rules and constraints to audit in this specific PR diff",
-      "model": "unsloth/Meta-Llama-3.1-70B-Instruct" (for high stakes domain like billing/security/auth) or "gpt-4o-mini" (for other areas)
-    }},
-    {{
-      "role": "Second Role Title",
-      "domain": "Second Domain key",
-      "system_prompt": "Second tailored prompt",
-      "model": "gpt-4o-mini" or "unsloth/Meta-Llama-3.1-70B-Instruct"
+      "model": "unsloth/Meta-Llama-3.1-8B-Instruct" (for high stakes domain like billing/security/auth) or "gpt-4o-mini" (for other areas)
     }}
+    // Add additional reviewer objects as needed (between 2 to 4 total reviewers)
   ],
   "additional_files": [
     "Any repository files that would be helpful to fetch as additional context for this PR (e.g., 'mock_infrastructure/postgres_schema.sql', 'mock_infrastructure/openapi_contract.json', 'mock_infrastructure/CODEOWNERS')"
@@ -885,6 +882,101 @@ The JSON object must have exactly the following structure:
     except Exception as e:
         logger.error(f"[JIT ANALYSIS] LLM Swarm Synthesis failed: {e}. Falling back to heuristic defaults.")
         return fallback_res
+
+
+async def generate_debate_summary(events: List[Dict[str, Any]]) -> str:
+    from src.swarm import client
+    if not client:
+        return "Offline/Fallback Mode: Summarization skipped."
+    
+    # Filter and format the debate messages
+    debate_log = []
+    for event in events:
+        sender = event.get("sender", "")
+        role = event.get("role", "")
+        msg = event.get("message", "")
+        # Skip system messages or very generic progress events
+        if sender == "SYSTEM" or role == "SYSTEM":
+            continue
+        if "Starting Adversarial Debate" in msg or "Consensus reached" in msg:
+            continue
+        
+        # Format the agent's message
+        debate_log.append(f"[{role} ({sender})]:\n{msg}\n---")
+    
+    if not debate_log:
+        return "No active debate messages recorded."
+    
+    debate_transcript = "\n".join(debate_log)
+    
+    prompt = f"""
+You are an expert AI Governance Auditor. Summarize the following adversarial code review debate transcript concisely.
+Highlight:
+1. What the developer proposed and why it failed any initial compliance checks.
+2. The specific concerns/arguments raised by the security/database reviewers (e.g. SQL injection, PII leak, unbounded queries).
+3. How the coder addressed those concerns in the final code, and what checks were satisfied.
+
+Keep the summary professional, executive-level, clear, and under 3-4 bullet points or a short paragraph. Do not mention system-level instructions or details.
+
+Debate Transcript:
+{debate_transcript}
+"""
+    try:
+        def call_llm():
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a professional security and code quality analyst."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=400
+            )
+            return response.choices[0].message.content.strip()
+            
+        return await asyncio.to_thread(call_llm)
+    except Exception as e:
+        logger.error(f"Failed to generate LLM debate summary: {e}")
+        return "Failed to generate debate summary."
+
+
+async def generate_pr_summary(pr_diff: str, pr_title: str, diff_files: List[str]) -> str:
+    from src.swarm import client
+    import json
+    
+    if not pr_diff and "Refactor checkout flow" in pr_title:
+        return "This PR refactors the checkout flow database queries, modifying the order retrieval logic to enforce schema validation and query boundaries."
+        
+    if not client:
+        return f"Loaded PR: {pr_title} (modifying {', '.join(diff_files)})."
+    
+    prompt = f"""
+You are an expert code analyst. Synthesize a brief (2-3 sentences max) professional, executive-level summary of the following Pull Request:
+Title: {pr_title}
+Files Touched: {json.dumps(diff_files)}
+
+PR Diff:
+{pr_diff}
+
+Focus on what code changes are actually proposed. Keep it concise, clear, and direct.
+"""
+    try:
+        def call_llm():
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a professional code review analyst."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=250
+            )
+            return response.choices[0].message.content.strip()
+            
+        return await asyncio.to_thread(call_llm)
+    except Exception as e:
+        logger.error(f"Failed to generate PR summary: {e}")
+        return f"Loaded PR: {pr_title} (modifying {', '.join(diff_files)})."
 
 
 async def run_simulation_task():
@@ -951,20 +1043,15 @@ async def run_simulation_task():
         }
         state.save_state()
         
-    state.add_event("Modified files: " + str(state.diff_files), level="info")
+    # Generate and log PR Summary
+    try:
+        summary = await generate_pr_summary(state.pr_diff or "", state.pr_title or "", state.diff_files)
+        state.add_event(f"📝 [PR SUMMARY] {summary}", level="info")
+    except Exception as e:
+        logger.error(f"Error generating PR summary: {e}")
 
     # Bug 5: delay after PR loaded
     await asyncio.sleep(0.5)
-
-    # Bug 1 fix: contextual JIRA event based on PR domain
-    jira_ctx = generate_jira_context(state.pr_title or "", state.diff_files)
-    state.add_event(f'[JIRA INTEGRATION] Fetched context for Ticket {jira_ctx}', level="info")
-    
-    # Bug 5: delay after JIRA integration
-    await asyncio.sleep(0.4)
-
-    scenario_desc = SCENARIO_CONFIG.get(state.scenario, {}).get("description", "Dynamic PR review loaded from GitHub")
-    state.add_event(f"Scenario: {scenario_desc}", level="info")
     
     # 1. Triage compliance
     state.status = "TRIAGE"
@@ -1013,7 +1100,6 @@ async def run_simulation_task():
         
     # 3. Setup agents and run debate
     state.status = "RUNNING"
-    state.add_event("Initializing Band.ai remote agent credentials...", level="info")
     await asyncio.sleep(0.4)
     
     unique_suffix = session.unique_suffix
@@ -1038,7 +1124,6 @@ async def run_simulation_task():
     if state.scenario == "dynamic":
         if jit_config and "reviewers" in jit_config:
             reviewers = []
-            state.add_event("SYSTEM: Initializing synthesized JIT reviewer agents...", level="info")
             for idx, r_def in enumerate(jit_config["reviewers"]):
                 role = r_def.get("role", "Code Auditor")
                 domain = r_def.get("domain", "architecture")
@@ -1053,12 +1138,8 @@ async def run_simulation_task():
                     system_prompt_override=system_prompt_override
                 )
                 reviewers.append(r_agent)
-                state.add_event(f"SYSTEM: Created synthesized agent '{role}' on model '{model}' for domain '{domain}'.", level="info")
         else:
             reviewers = generate_dynamic_reviewers(state.diff_files, unique_suffix, limit=None)
-            state.add_event("SYSTEM: Analyzing files to dynamically invent reviewer agent identities (fallback)...")
-            for r in reviewers:
-                state.add_event(f"SYSTEM: Created agent '{r.role}' to verify compliance for files in domain '{r.domain}'.")
     else:
         reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-8B-Instruct", domain="auth")
         reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
@@ -1209,16 +1290,31 @@ async def run_simulation_task():
         state.add_event("Zero-Fallback Mode Active. Crashed out directly on Band.ai platform limit.", level="error")
         state.save_state()
         # Ensure we run cleanup (which preserves reused agents keys)
-        await session.cleanup_agents(conductor, coder, [reviewer_auth, reviewer_cart])
+        await session.cleanup_agents(conductor, coder, reviewers)
         raise e
+    # Generate LLM debate summary
+    if state.debate_summary:
+        try:
+            state.add_event("SYSTEM: Summarizing adversarial debate history via LLM...", level="info")
+            summary_text = await generate_debate_summary(state.events)
+            state.debate_summary["summary_text"] = summary_text
+            state.save_state()
+        except Exception as se:
+            logger.error(f"Failed to generate debate summary: {se}")
+
     # Post scorecard to GitHub PR
     try:
         comment_body = format_scorecard_comment(state)
-        await asyncio.to_thread(post_github_pr_comment, state.pr_id, comment_body, state.repo)
+        posted = await asyncio.to_thread(post_github_pr_comment, state.pr_id, comment_body, state.repo)
+        if posted:
+            state.add_event(f"✓ Successfully posted scorecard comment to GitHub {state.pr_id}.", level="info")
+        else:
+            state.add_event(f"⚠️ GitHub commenting skipped or failed. Check GH_TOKEN / GITHUB_REPO.", level="warning")
     except Exception as ge:
         logger.error(f"Failed to post GitHub PR comment: {ge}")
+        state.add_event(f"❌ Failed to post GitHub PR comment: {str(ge)}", level="error")
 
-    await session.cleanup_agents(conductor, coder, [reviewer_auth, reviewer_cart])
+    await session.cleanup_agents(conductor, coder, reviewers)
     state.save_state()
 
 

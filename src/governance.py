@@ -100,6 +100,7 @@ class ConsensusTracker:
         self.rounds = {}  # Maps pr_id -> count of failed/disagreement rounds
         self.total_rounds = {}  # Maps pr_id -> total rounds attempted
         self.votes = {}   # Maps pr_id -> [{reviewer, role, verdict, round, domain}]
+        self.round_history = {} # Maps pr_id -> [{"round": int, "outcome": str}]
 
     def record_vote(self, pr_id: str, reviewer_name: str, role: str, verdict: str, round_num: int, domain: str = ""):
         """Record an individual reviewer's vote for a given round."""
@@ -126,8 +127,17 @@ class ConsensusTracker:
             self.rounds[pr_id] = 0
         if pr_id not in self.total_rounds:
             self.total_rounds[pr_id] = 0
+        if pr_id not in self.round_history:
+            self.round_history[pr_id] = []
 
         self.total_rounds[pr_id] += 1
+
+        round_num = self.total_rounds[pr_id]
+        round_outcome = "approved" if outcome == "approved" else "rejected"
+        self.round_history[pr_id].append({
+            "round": round_num,
+            "outcome": round_outcome
+        })
 
         if outcome == "approved":
             return {
@@ -170,7 +180,8 @@ class ConsensusTracker:
             "approvals": len(passed_votes),
             "rejections_by_reviewer": rejections_by_reviewer,
             "is_deadlocked": self.rounds.get(pr_id, 0) >= self.max_rounds,
-            "votes": votes
+            "votes": votes,
+            "round_history": self.round_history.get(pr_id, [])
         }
 
 

@@ -508,7 +508,7 @@ function DebateMessage({ evt, activeAgents }) {
   const isToolCall = rawMsg.startsWith("🔌");
   const isTriage = evt.sender === "TriageScanner" || rawMsg.includes("Zero-Trust");
   const isBandRoom = rawMsg.includes("Band.ai Task Room");
-  const isJira = rawMsg.includes("[JIRA INTEGRATION]");
+  const isPrSummary = rawMsg.startsWith("📝 [PR SUMMARY]");
   const isWatchdog = evt.sender === "WatchdogDaemon" || evt.sender === "TelemetryScanner" || rawMsg.includes("Anomaly detected");
 
   const senderColor = getSenderColor(evt.sender);
@@ -554,6 +554,22 @@ function DebateMessage({ evt, activeAgents }) {
     );
   }
 
+  if (isPrSummary) {
+    const cleanMsg = rawMsg.replace(/^📝\s*\[PR SUMMARY\]\s*/i, "");
+    return (
+      <div style={{
+        padding: "0.8rem 1rem", borderRadius: "10px",
+        background: "rgba(139,92,246,0.06)", border: "1px solid rgba(139,92,246,0.15)",
+        borderLeft: "3px solid #8b5cf6"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontWeight: 700, color: "#a78bfa", fontSize: "0.72rem", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <span>📝</span> PR Diff Executive Summary
+        </div>
+        <p style={{ margin: 0, fontSize: "0.82rem", color: "#e9d5ff", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{cleanMsg}</p>
+      </div>
+    );
+  }
+
   if (isTriage) {
     const isTriageFail = rawMsg.includes("FAILED") || rawMsg.includes("Zero-Trust Check FAILED");
     return (
@@ -582,21 +598,6 @@ function DebateMessage({ evt, activeAgents }) {
           🔮 Band.ai Orchestration Engine
         </div>
         <p style={{ margin: 0, fontSize: "0.8rem", color: "#e9d5ff", whiteSpace: "pre-wrap", fontWeight: 600 }}>{rawMsg}</p>
-      </div>
-    );
-  }
-
-  if (isJira) {
-    return (
-      <div style={{
-        padding: "0.65rem 0.75rem", borderRadius: "10px",
-        background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.15)",
-        borderLeft: "3px solid #2563eb"
-      }}>
-        <div style={{ fontWeight: 700, color: "#60a5fa", fontSize: "0.72rem", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-          📘 JIRA Integration
-        </div>
-        <p style={{ margin: 0, fontSize: "0.8rem", color: "#d1d5db", whiteSpace: "pre-wrap", fontStyle: "italic" }}>{rawMsg}</p>
       </div>
     );
   }

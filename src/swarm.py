@@ -236,6 +236,19 @@ class ReviewerAgent(Agent):
             "and cite the specific MCP violation. Do not invent hypothetical concerns "
             "when the actual checks are clean."
         ),
+        "database": (
+            "Your domain: SQL syntax, database schema structure, index usage, and query boundaries. "
+            "You validate queries against the PostgreSQL schema (using limits, preventing OOM, checking tables/columns). "
+            "Be decisive: base your verdict STRICTLY on the MCP check results provided. "
+            "If the code does not execute SQL queries or the database schema check is clean, you MUST approve it. "
+            "Do not invent hypothetical database concerns when the actual schema checks are clean."
+        ),
+        "billing": (
+            "Your domain: Financial transactions, billing records, database query boundaries, and RBAC policies. "
+            "You validate SQL queries against billing schemas and ensure standard role checks are present. "
+            "Be decisive: base your verdict STRICTLY on the MCP check results provided. "
+            "If the checks are clean, say PASSED."
+        ),
         "cart": (
             "Your domain: REST endpoint payloads and OpenAPI contract compliance ONLY. "
             "You validate that any API calls in the code match the OpenAPI specification. "
@@ -244,12 +257,38 @@ class ReviewerAgent(Agent):
             "the OpenAPI contract domain. Those are another reviewer's responsibility. "
             "If the code does NOT make any API calls and your MCP OpenAPI check shows "
             "COMPLIANT, you MUST output '✓ REVIEW PASSED:' with a brief note that "
-            "the code does not reference any API endpoints in your domain and the MCP "
-            "OpenAPI Contract check shows COMPLIANT. "
+            "the code does not reference any API endpoints in your domain. "
             "Only reject if the MCP OpenAPI Contract check shows actual violations. "
-            "Do NOT demand API integration, cart_id, or checkout flows if the code "
-            "is purely a database query function."
+            "Do NOT demand API integration if the code is purely a database query function."
         ),
+        "api": (
+            "Your domain: API routes, request/response models, payloads, and OpenAPI contract compliance. "
+            "You validate that any API endpoints or payload models match the OpenAPI contract. "
+            "CRITICAL: Do NOT review database tables, SQL query syntax, or database schemas. "
+            "If the code does not define or call REST APIs, or if the contract checks are clean, you MUST approve it."
+        ),
+        "qa": (
+            "Your domain: Testing, test suites, test coverage, and validation. "
+            "You evaluate whether the proposed code has sufficient unit tests, handles edge cases, and "
+            "validates input correctness. You do NOT audit database tables or OpenAPI contracts. "
+            "Verify that the test scripts cover the functionality introduced in the PR."
+        ),
+        "documentation": (
+            "Your domain: README files, example scripts, inline documentation, and docstrings. "
+            "You evaluate whether the example scripts and README files are updated to correctly reflect the "
+            "code changes. You do NOT audit database tables, SQL queries, or OpenAPI contracts. "
+            "Focus purely on whether documentation is clear, accurate, and complete."
+        ),
+        "security": (
+            "Your domain: Secure coding practices, vulnerability prevention, and credential protection. "
+            "You audit the code for secrets leakage (e.g. .env files, config keys), injection flaws, and standard security practices. "
+            "You do NOT verify database schema columns or OpenAPI payload formats unless they pose a direct security risk."
+        ),
+        "architecture": (
+            "Your domain: Software design, design patterns, refactoring, and code organization. "
+            "You review whether the code follows clean architecture, proper module organization, and "
+            "sustainable software development practices. You do NOT verify database schema compliance or API schemas."
+        )
     }
 
     def __init__(self, role: str, name_suffix: str = "", model: str = "gpt-4o-mini", domain: str = "auth", system_prompt_override: Optional[str] = None):
@@ -257,15 +296,31 @@ class ReviewerAgent(Agent):
         domain_ctx = self.DOMAIN_CONTEXT.get(domain, "")
         base_prompt = system_prompt_override if system_prompt_override else f"You are the {role} Agent. Your job is to act as a strict codebase validator and SME. {domain_ctx}"
         
+        # Select guideline template based on domain type
+        if domain in ["auth", "database", "billing"]:
+            guideline_2 = "2. Your review must be dynamic and based on the provided MCP database schema compliance check logs.\n"
+            guideline_3 = ("3. If there are database schema violations in the provided logs, you MUST reject the code. "
+                           "You MUST output '❌ REVIEW FAILED:' at the very start of your message and detail the specific database violations. "
+                           "If the logs show no schema violations or if no SQL queries are executed in the code, output '✓ REVIEW PASSED:' at the start of your message.\n")
+        elif domain in ["api", "cart"]:
+            guideline_2 = "2. Your review must be dynamic and based on the provided MCP OpenAPI contract compliance check logs.\n"
+            guideline_3 = ("3. If there are OpenAPI contract violations in the provided logs, you MUST reject the code. "
+                           "You MUST output '❌ REVIEW FAILED:' at the very start of your message and detail the specific API violations. "
+                           "If the logs show no contract violations or if no API endpoints are touched in the code, output '✓ REVIEW PASSED:' at the start of your message.\n")
+        else:
+            guideline_2 = "2. Your review must be based on the proposed code changes and your domain-specific criteria (e.g., documentation quality, test coverage, code architecture).\n"
+            guideline_3 = ("3. Do NOT invent hypothetical database schema or OpenAPI contract violations, as those are outside your domain. "
+                           "If there are clear defects, missing tests, or documentation errors in the proposed code in your domain, you MUST reject the code. "
+                           "You MUST output '❌ REVIEW FAILED:' at the very start of your message and detail the specific issues. "
+                           "If the code meets all standards in your domain, output '✓ REVIEW PASSED:' at the start of your message.\n")
+
         system_prompt = (
             f"{base_prompt}\n\n"
             "Guidelines:\n"
             "1. You review proposals submitted by the Lead Coder.\n"
-            "2. Your review must be dynamic and based on the provided MCP compliance logs (PostgreSQL schema and OpenAPI contract check logs).\n"
-            "3. If there are violations in the compliance checks in your domain, you MUST reject the code. "
-            "You MUST output '❌ REVIEW FAILED:' at the very start of your message and detail the specific violations.\n"
-            "4. If and only if there are zero compliance violations in your domain, output '✓ REVIEW PASSED:' "
-            "at the start of your message.\n"
+            f"{guideline_2}"
+            f"{guideline_3}"
+            "4. Make sure your verdict is clear and starts with either '✓ REVIEW PASSED:' or '❌ REVIEW FAILED:'.\n"
         )
         self.domain = domain
         super().__init__(name=name, role=role, system_prompt=system_prompt, model=model)
@@ -383,7 +438,7 @@ class SwarmSession:
             failed_deletions = []
             for agent_info in existing_agents:
                 try:
-                    await self.human_client.human_api_agents.delete_my_agent(id=agent_info.id)
+                    await self.human_client.human_api_agents.delete_my_agent(id=agent_info.id, force=True)
                     logger.info(f"[BAND REST] Deleted stale agent {agent_info.name} (ID: {agent_info.id}).")
                 except Exception as e:
                     logger.error(f"[BAND REST] Failed to delete stale agent {agent_info.name}: {e}")
@@ -725,7 +780,7 @@ class SwarmSession:
             for agent in [conductor, coder] + reviewers:
                 if agent.agent_id:
                     try:
-                        await self.human_client.human_api_agents.delete_my_agent(id=agent.agent_id)
+                        await self.human_client.human_api_agents.delete_my_agent(id=agent.agent_id, force=True)
                         logger.info(f"[BAND REST] Agent {agent.name} deleted.")
                     except Exception as e:
                         logger.error(f"[BAND REST] Failed to delete agent {agent.name}: {e}")

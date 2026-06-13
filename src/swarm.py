@@ -380,15 +380,18 @@ class SwarmSession:
         # Zero-Trust Slate Clearance to prevent exceeding the 10-agent platform limit
         if existing_agents:
             logger.info(f"[BAND REST] Clearing out {len(existing_agents)} existing agents to start with a clean slate...")
+            failed_deletions = []
             for agent_info in existing_agents:
                 try:
                     await self.human_client.human_api_agents.delete_my_agent(id=agent_info.id)
                     logger.info(f"[BAND REST] Deleted stale agent {agent_info.name} (ID: {agent_info.id}).")
                 except Exception as e:
                     logger.error(f"[BAND REST] Failed to delete stale agent {agent_info.name}: {e}")
-            existing_agents = []
+                    failed_deletions.append(agent_info)
+            existing_agents = failed_deletions
 
-        if len(existing_agents) >= 9:
+        required_slots = 2 + len(reviewers)
+        if len(existing_agents) + required_slots > 10:
             logger.info(f"[BAND REST] Agent limit (10) nearly reached. Reusing pre-registered agents...")
             self.reused = True
             

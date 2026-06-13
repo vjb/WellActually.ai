@@ -191,41 +191,81 @@ python -m pytest tests/test_swarm.py -v
 
 ## 🏗️ Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                     SWARM CONTROL CENTER                         │
-│                    (React + Vite Dashboard)                       │
-│  ┌────────────┬──────────────┬────────────┬──────────────────┐  │
-│  │ PR Ingest  │ JIT Agents   │  Topology  │  Debate Feed     │  │
-│  │ + Triage   │ + Synthesis  │  + Glow    │  + HITL Consent  │  │
-│  └────────────┴──────────────┴────────────┴──────────────────┘  │
-│                          ↕ REST Polling                           │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │            FastAPI Backend (src/server.py)                    │ │
-│  │  /api/start  /api/status  /api/events  /api/consent          │ │
-│  │  JIT Synthesis Engine │ Adversarial Debate Loop               │ │
-│  └──────────────────────────────────────────────────────────────┘ │
-│                          ↕                                        │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │         Swarm Orchestration (src/swarm.py)                    │ │
-│  │  ┌─────────────┐  ┌────────────────────┐  ┌──────────────┐  │ │
-│  │  │ Conductor    │  │ Lead Coder Agent   │  │ JIT Reviewer │  │ │
-│  │  │ (AIML API)   │  │ (AIML API gpt-4o)  │  │ Agents       │  │ │
-│  │  │              │  │                    │  │ (Featherless │  │ │
-│  │  │              │  │                    │  │  Llama-70B)  │  │ │
-│  │  └──────────────┘  └────────────────────┘  └──────────────┘  │ │
-│  │                          ↕ Band.ai REST SDK                   │ │
-│  │  ┌──────────────────────────────────────────────────────────┐ │ │
-│  │  │ Band.ai Platform: Agents, Rooms, Messages, Mentions      │ │ │
-│  │  └──────────────────────────────────────────────────────────┘ │ │
-│  └──────────────────────────────────────────────────────────────┘ │
-│                          ↕                                        │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │      Governance Engine (src/governance.py)                    │ │
-│  │  CODEOWNERS Triage │ ConsensusTracker │ Zero-Trust Gate      │ │
-│  │  JIT Domain Analysis │ Watchdog Scanner                      │ │
-│  └──────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Frontend [🖥️ Swarm Control Center React/Vite]
+        UI[App.jsx Dashboard]
+        subgraph PanelComponents [UI Panels]
+            P1[PR Ingest & Triage]
+            P2[JIT Agent Synthesis]
+            P3[Topology Graph & Glow]
+            P4[Debate Feed & HITL Control]
+        end
+    end
+
+    subgraph Backend [⚙️ FastAPI Backend src/server.py]
+        API[REST & Event Server]
+        subgraph BackendEngines [Backend Core]
+            SE[JIT Swarm Synthesis Engine]
+            DL[Adversarial Debate Loop]
+        end
+    end
+
+    subgraph Orchestration [🔗 Swarm Orchestration src/swarm.py]
+        Conductor[Orchestrator Agent]
+        Coder[Lead Coder Agent]
+        Reviewers[JIT Reviewer Agents]
+    end
+
+    subgraph Governance [🛡️ Governance Engine src/governance.py]
+        TriageScanner[CODEOWNERS Triage]
+        CT[Consensus Tracker]
+        WD[Watchdog Telemetry Scanner]
+        Verifier[MCP Verifiers: Schema, OpenAPI, RBAC]
+    end
+
+    subgraph External [🌐 External Platforms]
+        Band[Band.ai REST API: Rooms, Messages, Mentions]
+        AIML[AIML API Gateway: GPT-4o-mini]
+        Featherless[Featherless AI Gateway: Llama-3.1-8B-Instruct]
+        GitHub[GitHub API: Load PR & Post Scorecard Comment]
+    end
+
+    %% Flow connections
+    UI <-->|REST Polling & Actions| API
+    P1 -->|Select PR| API
+    P4 -->|Human Consent Override| API
+
+    API <--> SE
+    API <--> DL
+
+    SE -->|Triggers| TriageScanner
+    SE -->|MCP Rules| Verifier
+    DL -->|Track Votes| CT
+    DL -->|Scan Log Stream| WD
+
+    SE -->|Synthesize Agents| Orchestration
+    DL -->|Debate Rounds| Orchestration
+
+    Orchestration <-->|Register & Chat| Band
+    Conductor -->|Query Model| AIML
+    Coder -->|Query Model| AIML
+    Reviewers -->|Query Model| Featherless
+    API <-->|Fetch Diff / Post Comment| GitHub
+
+    %% Styling
+    classDef default fill:#111827,stroke:#374151,color:#f3f4f6,stroke-width:1px;
+    classDef ui fill:#0f172a,stroke:#06b6d4,color:#e2e8f0,stroke-width:1px;
+    classDef srv fill:#022c22,stroke:#10b981,color:#e2e8f0,stroke-width:1px;
+    classDef orch fill:#1e1b4b,stroke:#6366f1,color:#e2e8f0,stroke-width:1px;
+    classDef gov fill:#311005,stroke:#f97316,color:#e2e8f0,stroke-width:1px;
+    classDef ext fill:#1c1917,stroke:#78716c,color:#e2e8f0,stroke-width:1px;
+
+    class UI,P1,P2,P3,P4 ui;
+    class API,SE,DL srv;
+    class Conductor,Coder,Reviewers orch;
+    class TriageScanner,CT,WD,Verifier gov;
+    class Band,AIML,Featherless,GitHub ext;
 ```
 
 ---

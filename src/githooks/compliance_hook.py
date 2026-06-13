@@ -1,13 +1,15 @@
+from __future__ import annotations
 import sys
 import subprocess
 import os
+from typing import List
 
 # Ensure the project root is in the python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.governance import parse_codeowners, triage_pr
 
-def get_staged_files() -> list[str]:
+def get_staged_files() -> List[str]:
     """
     Retrieves the list of staged files from the Git index.
     """

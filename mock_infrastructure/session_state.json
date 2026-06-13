@@ -1,0 +1,29 @@
+{
+  "status": "IDLE",
+  "scenario": "rbac_bypass",
+  "pr_id": "PR-217",
+  "diff_files": [
+    "src/billing/spending_report.py"
+  ],
+  "triage_result": null,
+  "consensus_round": 0,
+  "room_id": null,
+  "current_code": null,
+  "schema_check": null,
+  "openapi_check": null,
+  "rbac_check": null,
+  "debate_summary": null,
+  "resolution_type": null,
+  "initial_schema_check": null,
+  "initial_openapi_check": null,
+  "initial_rbac_check": null,
+  "mcp_targets": {
+    "schema_table": "billing_profiles",
+    "api_endpoint": "/api/v1/billing/spending",
+    "rbac_target": "billing_profiles.spending_limit_usd"
+  },
+  "generation": 10,
+  "human_consent": null,
+  "events": [],
+  "watchdog_logs": []
+}

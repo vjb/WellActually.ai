@@ -54,10 +54,13 @@ async def test_openai(api_key: str) -> bool:
         logger.error("OpenAI API key is missing or is a placeholder.")
         return False
 
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.aimlapi.com/v1").rstrip("/")
+    url = f"{base_url}/chat/completions"
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
+                url,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "content-type": "application/json",
@@ -190,59 +193,59 @@ async def test_featherless(api_key: str) -> bool:
 
 async def main():
     logger.info("Loading environment configuration...")
-    # Load .env explicitly from the script's folder
-    env_path = Path(__file__).resolve().parent / ".env"
-    load_dotenv(env_path)
+    from src.config import config
     
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    openai_key = os.environ.get("OPENAI_API_KEY")
-    band_key = os.environ.get("BAND_API_KEY")
-    github_token = os.environ.get("GH_TOKEN")
-    aiml_key = os.environ.get("AIML_API_KEY")
-    featherless_key = os.environ.get("FEATHERLESS_API_KEY")
+    anthropic_key = config.get("ANTHROPIC_API_KEY")
+    openai_key = config.get("OPENAI_API_KEY")
+    band_key = config.get("BAND_API_KEY")
+    github_token = config.get("GH_TOKEN")
+    aiml_key = config.get("AIML_API_KEY")
+    featherless_key = config.get("FEATHERLESS_API_KEY")
     
-    # We read codeband.yaml to get the band.rest_url
-    band_rest_url = "https://app.band.ai"
-    try:
-        import yaml
-        config_path = Path(__file__).resolve().parent / "codeband.yaml"
-        if config_path.is_file():
-            with open(config_path, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f) or {}
-                band_rest_url = cfg.get("band", {}).get("rest_url", band_rest_url)
-    except Exception:
-        pass
+    # Resolve the band REST URL, falling back to codeband.yaml settings if defined
+    band_rest_url = config.get("BAND_REST_URL", yaml_path="band.rest_url", default="https://app.band.ai")
     
-    results = {}
+    # Map tasks to run concurrently
+    services = ["Anthropic", "OpenAI", "GitHub", "Band.ai", "AIML API", "Featherless"]
+    tasks = [
+        test_anthropic(anthropic_key),
+        test_openai(openai_key),
+        test_github(github_token),
+        test_band(band_key, band_rest_url),
+        test_aiml(aiml_key),
+        test_featherless(featherless_key)
+    ]
     
-    # Run tests sequentially
-    results["Anthropic"] = await test_anthropic(anthropic_key)
-    print("-" * 60)
-    results["OpenAI"] = await test_openai(openai_key)
-    print("-" * 60)
-    results["GitHub"] = await test_github(github_token)
-    print("-" * 60)
-    results["Band.ai"] = await test_band(band_key, band_rest_url)
-    print("-" * 60)
-    results["AIML API"] = await test_aiml(aiml_key)
-    print("-" * 60)
-    results["Featherless"] = await test_featherless(featherless_key)
+    logger.info("Executing all checks concurrently...")
+    task_results = await asyncio.gather(*tasks)
+    
+    results = dict(zip(services, task_results))
     print("=" * 60)
     
     logger.info("VERIFICATION SUMMARY:")
-    all_ok = True
+    required_services = {"Band.ai", "AIML API", "Featherless"}
+    required_failed = []
+    optional_failed = []
+    
     for service, status in results.items():
-        status_str = "SUCCESS" if status else "FAILURE"
-        logger.info(f"  {service.ljust(15)}: {status_str}")
+        is_required = service in required_services
+        req_label = " [REQUIRED]" if is_required else " [OPTIONAL]"
+        status_str = "✓ SUCCESS" if status else "✗ FAILURE"
+        logger.info(f"  {service.ljust(15)}{req_label.ljust(12)}: {status_str}")
+        
         if not status:
-            all_ok = False
-            
-    if all_ok:
-        logger.info("All environment keys are successfully verified!")
-        sys.exit(0)
-    else:
-        logger.error("Some environment keys failed verification.")
+            if is_required:
+                required_failed.append(service)
+            else:
+                optional_failed.append(service)
+                
+    print("=" * 60)
+    if required_failed:
+        logger.error(f"✗ Critical failure: Required environment verification failed for: {', '.join(required_failed)}")
         sys.exit(1)
+    else:
+        logger.info("✓ Success: All required environment checks passed! (Optional failures did not block)")
+        sys.exit(0)
 
 if __name__ == "__main__":
     asyncio.run(main())

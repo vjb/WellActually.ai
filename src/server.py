@@ -1023,20 +1023,19 @@ async def run_simulation_task():
         
     jit_config = None
     if state.scenario == "dynamic":
-        state.add_event("SYSTEM: Conductor analyzing PR details & diff for JIT Swarm Synthesis...", level="info")
+        state.add_event("Conductor analyzing PR details & diff for JIT Swarm Synthesis...", level="info")
         jit_config = await analyze_pr_for_swarm(state.pr_diff or "", state.pr_title or "", state.diff_files)
         
         # Load additional context files requested by LLM
         additional_files = jit_config.get("additional_files", [])
         if additional_files:
-            state.add_event(f"SYSTEM: Conductor identified additional context files to retrieve: {additional_files}", level="info")
+            state.add_event(f"Conductor identified additional context files to retrieve: {additional_files}", level="info")
             loaded_files = dict(state.loaded_file_contents) if state.loaded_file_contents else {}
             for filepath in additional_files:
                 if filepath not in loaded_files:
                     file_content = await get_github_file_content(state.repo or "vjb/WellActually.ai", filepath)
                     if file_content:
                         loaded_files[filepath] = file_content
-                        state.add_event(f"SYSTEM: Successfully retrieved context file: {filepath}", level="info")
             state.loaded_file_contents = loaded_files
             
         # Detect and merge MCP targets
@@ -1359,7 +1358,7 @@ async def run_simulation_task():
     # Generate LLM debate summary
     if state.debate_summary:
         try:
-            state.add_event("SYSTEM: Summarizing adversarial debate history via LLM...", level="info")
+            state.add_event("Summarizing adversarial debate history via LLM...", level="info")
             summary_text = await generate_debate_summary(state.events)
             state.debate_summary["summary_text"] = summary_text
             state.save_state()

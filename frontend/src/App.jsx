@@ -625,6 +625,51 @@ function DebateMessage({ evt, activeAgents }) {
     );
   }
 
+  // Render standard system logs in a minimal inline style to reduce noise
+  if (!isAgent && evt.sender === "SYSTEM" && !isToolCall && !isTriage && !isBandRoom && !isPrSummary && !isWatchdog) {
+    const isSuccess = rawMsg.startsWith("✓") || rawMsg.toLowerCase().includes("success") || rawMsg.toLowerCase().includes("passed");
+    const isWarn = rawMsg.startsWith("⚠️") || rawMsg.toLowerCase().includes("warning") || rawMsg.toLowerCase().includes("skip");
+    const isError = rawMsg.startsWith("❌") || rawMsg.startsWith("💥") || rawMsg.toLowerCase().includes("failed") || rawMsg.toLowerCase().includes("error");
+    
+    let color = "#9ca3af"; // muted grey
+    let icon = "⚙️";
+    
+    if (isSuccess) {
+      color = "#34d399"; // light green
+      icon = "✓";
+    } else if (isWarn) {
+      color = "#fbbf24"; // light yellow
+      icon = "⚠️";
+    } else if (isError) {
+      color = "#f87171"; // light red
+      icon = "❌";
+    }
+    
+    // Strip redundant status/SYSTEM prefixes
+    const cleanText = rawMsg
+      .replace(/^[✓⚠️❌💥]\s*/, "")
+      .replace(/^SYSTEM:\s*/i, "");
+
+    return (
+      <div style={{
+        fontSize: "0.72rem",
+        color: color,
+        padding: "0.2rem 0.5rem",
+        fontStyle: "italic",
+        display: "flex",
+        alignItems: "center",
+        gap: "0.4rem",
+        fontFamily: "'JetBrains Mono', monospace",
+        background: "rgba(255,255,255,0.01)",
+        borderRadius: "6px",
+        border: "1px solid rgba(255,255,255,0.02)"
+      }}>
+        <span style={{ opacity: 0.8, fontWeight: 700 }}>{icon}</span>
+        <span>{cleanText}</span>
+      </div>
+    );
+  }
+
   // Standard agent or system message
   const hasCode = rawMsg.includes("```") || (rawMsg.includes("def ") && rawMsg.includes(":"));
 

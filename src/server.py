@@ -890,7 +890,7 @@ The JSON object must have exactly the following structure:
         return fallback_res
 
 
-async def generate_debate_summary(events: List[Dict[str, Any]]) -> str:
+async def generate_debate_summary(events: List[Dict[str, Any]], status: str = "HALTED", resolution: str = "halted") -> str:
     from src.swarm import client
     if not client:
         return "Offline/Fallback Mode: Summarization skipped."
@@ -917,12 +917,18 @@ async def generate_debate_summary(events: List[Dict[str, Any]]) -> str:
     
     prompt = f"""
 You are an expert AI Governance Auditor. Summarize the following adversarial code review debate transcript concisely.
+
+Final Simulation Outcome:
+- Simulation Status: {status}
+- Final Resolution Verdict: {resolution}
+
 Highlight:
 1. What the developer proposed and why it failed any initial compliance checks.
 2. The specific concerns/arguments raised by the security/database reviewers (e.g. SQL injection, PII leak, unbounded queries).
-3. How the coder addressed those concerns in the final code, and what checks were satisfied.
+3. The final resolution: explain whether the coder successfully resolved all concerns and the PR was approved, or if the PR was rejected/deadlocked (specifically referencing the final status '{status}' and resolution '{resolution}' and stating if any database schema/security issues remained unresolved causing final rejection).
 
 Keep the summary professional, executive-level, clear, and under 3-4 bullet points or a short paragraph. Do not mention system-level instructions or details.
+CRITICAL: The summary's conclusion MUST accurately reflect the Final Simulation Outcome. If the outcome is rejected/deadlocked/halted, do NOT state or imply that the revised code passed all compliance checks or was approved.
 
 Debate Transcript:
 {debate_transcript}
@@ -1359,7 +1365,7 @@ async def run_simulation_task():
     if state.debate_summary:
         try:
             state.add_event("Summarizing adversarial debate history via LLM...", level="info")
-            summary_text = await generate_debate_summary(state.events)
+            summary_text = await generate_debate_summary(state.events, state.status, state.resolution_type)
             state.debate_summary["summary_text"] = summary_text
             state.save_state()
         except Exception as se:

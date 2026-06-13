@@ -70,7 +70,13 @@ To leverage specialized open-source models at scale, we route the **Auth & Fraud
 ### 3. **AIML API** (Hackathon Sponsor Partner)
 All other agents in the swarm (the Conductor Orchestrator, the Lead Coder, and the Cart SME Reviewer) are routed via the **AIML API** gateway (`https://api.aimlapi.com/v1`) using the `gpt-4o-mini` model. By redirecting `OPENAI_BASE_URL` to the AIML API endpoint, we achieve seamless integration with the sponsor's infrastructure while maintaining standard OpenAI client compatibility.
 
-### 4. **Codeband** (Architectural Reference)
+### 4. **GitHub** (Scorecard Workflow Integration)
+WellActually.ai connects directly to the developer's VCS flow to publish audit scorecards:
+- **PR Commenting**: Extracts the pull request number dynamically from the swarm state and posts a detailed markdown audit scorecard.
+- **Resilient Fallback**: If the pull request number does not exist on GitHub, the system catches the HTTP 404 error and automatically instantiates a new GitHub Issue instead to log the audit report.
+- **Developer Observation**: Developers can track exact compliance results (PostgreSQL Schema violations, OpenAPI Contract failures, Middleware RBAC warnings, and log stream anomalies) right inside their code repository.
+
+### 5. **Codeband** (Architectural Reference)
 WellActually.ai is built on the same **Band.ai REST SDK** (`thenvoi-rest`) that powers [Codeband](https://github.com/thenvoi/codeband). We use Codeband as the reference implementation, extending the pattern with:
 - **Domain-Driven Governance** — a deterministic `governance.py` engine that enforces CODEOWNERS policies, consensus tracking, and MCP bounded-context validation on top of the LLM debate.
 - **Cross-Provider Adversarial Pairing** — pairing **Featherless AI** (Llama-3.1-70B) against **AIML API** (GPT-4o-mini).
@@ -147,13 +153,13 @@ Verify everything is working:
 
 1. **Start the FastAPI Backend Server**:
    ```powershell
-   .venv\Scripts\python.exe -m uvicorn src.server:app --reload --port 8000
-   ```
+    .venv\Scripts\python.exe -m uvicorn src.server:app --reload --port 8000
+    ```
 2. **Start the React Frontend Dashboard**:
-   ```powershell
-   cd frontend
-   npm run dev
-   ```
+    ```powershell
+    cd frontend
+    npm run dev
+    ```
 3. Open your browser and navigate to `http://localhost:5173`.
 4. Click **Start Swarm Review** and observe:
    - Zero-trust compliance triage matches billing files and halts execution.
@@ -164,6 +170,26 @@ Verify everything is working:
    - Click **Reject PR** to resolve the deadlock, logging: `❌ Human Operator agreed with SME and REJECTED the PR.`
 
 ---
+
+## 🗄️ PostgreSQL Live DB Checks (v5)
+
+WellActually.ai supports a dual-mode database compliance check. 
+By default, it parses static schemas from `mock_infrastructure/postgres_schema.sql`. To run live schema checks against a running database:
+
+1. **Spin up a local PostgreSQL container**:
+   ```powershell
+   docker run --name wellactually-postgres -e POSTGRES_DB=wellactually -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres
+   ```
+2. **Load mock schema DDL**: Load `mock_infrastructure/postgres_schema.sql` into the container.
+3. **Configure your `.env` settings**:
+   ```env
+   USE_REAL_DB=true
+   DATABASE_URL="postgresql://postgres:postgres@localhost:5432/wellactually"
+   ```
+   *Note: Spawning the postgres MCP server requires Node.js 18+.*
+
+---
+
 
 ## 🏗️ Architecture
 

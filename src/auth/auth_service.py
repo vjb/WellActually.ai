@@ -1,11 +1,11 @@
 # Authentication & Security Service (High-Stakes Layer)
 # Handles user sessions, password validation, and token signing.
 
-import os
 import jwt
 from datetime import datetime, timedelta
+from src.config import config
 
-JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-key-for-auth")
+JWT_SECRET = config.get("JWT_SECRET", default="super-secret-key-for-auth")
 
 def authenticate_user(email: str, password_hash: str) -> dict:
     """

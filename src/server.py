@@ -318,7 +318,7 @@ async def run_simulation_task():
             state.current_code = round_res["coder_response"]
             
             # Run compliance verification for visual feedback
-            state.schema_check = verify_schema_compliance(state.current_code, session.schema_path)
+            state.schema_check = await asyncio.to_thread(verify_schema_compliance, state.current_code, session.schema_path)
             state.openapi_check = verify_openapi_compliance(state.current_code, session.openapi_path)
             state.rbac_check = verify_rbac_compliance(state.current_code)
             
@@ -482,7 +482,7 @@ async def get_telemetry():
 @app.get("/api/mcp")
 async def get_mcp():
     code = state.current_code or "def get_spending(user_id):\n    return db.query('SELECT spending_limit_usd, discount_tier FROM billing_profiles WHERE user_id = %s', user_id)"
-    schema_check = verify_schema_compliance(code, "mock_infrastructure/postgres_schema.sql")
+    schema_check = await asyncio.to_thread(verify_schema_compliance, code, "mock_infrastructure/postgres_schema.sql")
     openapi_check = verify_openapi_compliance(code, "mock_infrastructure/openapi_contract.json")
     return {
         "postgres": schema_check,

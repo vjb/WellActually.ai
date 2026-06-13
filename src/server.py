@@ -1193,48 +1193,304 @@ async def get_github_file_content(repo: str, filepath: str) -> str:
         return ""
 
 
-def get_mock_pr_data(number: int) -> Dict[str, Any]:
-    if number == 104:
-        return {
-            "number": 104,
-            "title": "Refactor checkout flow database queries",
-            "body": "Refactor checkout logic to process payment method tokens and add items with discount.",
-            "state": "open",
-            "diff_files": ["src/cart/checkout.py"],
-            "diff": """diff --git a/src/cart/checkout.py b/src/cart/checkout.py
+# ── Mock PR Catalog ─────────────────────────────────────────────────────
+# Diverse staged PRs that showcase different JIT swarm configurations.
+# These are used as fallbacks when GitHub API is unreachable and also
+# provide a compelling demo experience out-of-the-box.
+
+MOCK_PR_CATALOG = {
+    2: {
+        "number": 2,
+        "title": "Implement spending report fetcher endpoint",
+        "body": "Implements spending report retrieval for billing profiles. Queries billing_profiles for spending_limit_usd and discount_tier.",
+        "state": "open",
+        "branch": "feat/spending-report",
+        "diff_files": ["src/billing/spending_report.py"],
+        "diff": """diff --git a/src/billing/spending_report.py b/src/billing/spending_report.py
 new file mode 100644
-index 0000000..e69de29
---- /dev/null
-+++ b/src/cart/checkout.py
-@@ -0,0 +1,7 @@
-+def process_checkout(cart_id, payment_method_token):
-+    # Mismatch: cart_items table doesn't have discount_applied column
-+    db.execute("INSERT INTO cart_items (cart_id, product_id, quantity, price_at_addition, discount_applied) VALUES (cart_id, 99, 1, 10.00, 0.20)")
-+    # API Call mismatch check: missing cart_id property
-+    return api_post("/api/v1/checkout", data={"payment_method_token": payment_method_token})
-+""",
-            "file_contents": {"src/cart/checkout.py": ""}
-        }
-    else:
-        # Default to PR 217
-        return {
-            "number": 217,
-            "title": "Implement spending report fetcher endpoint",
-            "body": "Implements spending report retrieval for billing profiles.",
-            "state": "open",
-            "diff_files": ["src/billing/spending_report.py"],
-            "diff": """diff --git a/src/billing/spending_report.py b/src/billing/spending_report.py
-new file mode 100644
-index 0000000..e69de29
+index 0000000..f05444b
 --- /dev/null
 +++ b/src/billing/spending_report.py
-@@ -0,0 +1,4 @@
+@@ -0,0 +1,8 @@
++# Spending Report Fetcher Endpoint (Demo)
++import db
++
 +def get_spending(user_id):
 +    # Retrieve user's spending limit and discount tier from postgres
++    # WARNING: Column 'discount_tier' does not exist in 'billing_profiles' schema.
++    # WARNING: Direct access to 'billing_profiles.spending_limit_usd' without RBAC role verification.
 +    return db.query("SELECT spending_limit_usd, discount_tier FROM billing_profiles WHERE user_id = %s", user_id)
-+""",
-            "file_contents": {"src/billing/spending_report.py": ""}
+""",
+        "file_contents": {"src/billing/spending_report.py": ""}
+    },
+    3: {
+        "number": 3,
+        "title": "Add OAuth2 token refresh and session management",
+        "body": "Implements token refresh flow for OAuth2 sessions. Stores refresh tokens and manages session expiry with a new /auth/refresh endpoint.",
+        "state": "open",
+        "branch": "feat/oauth-token-refresh",
+        "diff_files": ["src/auth/token_refresh.py", "src/auth/session_manager.py"],
+        "diff": """diff --git a/src/auth/token_refresh.py b/src/auth/token_refresh.py
+new file mode 100644
+index 0000000..a1b2c3d
+--- /dev/null
++++ b/src/auth/token_refresh.py
+@@ -0,0 +1,22 @@
++# OAuth2 Token Refresh Handler
++import db
++import hashlib
++from datetime import datetime, timedelta
++
++SECRET_KEY = "hardcoded-jwt-secret-key-12345"
++
++def refresh_token(user_id, refresh_token_value):
++    # Store raw refresh token in database without hashing
++    # WARNING: Storing plaintext tokens in user_sessions table
++    db.execute(
++        "INSERT INTO user_sessions (user_id, refresh_token, expires_at) VALUES (%s, %s, %s)",
++        user_id, refresh_token_value, datetime.now() + timedelta(days=30)
++    )
++    # Generate new access token
++    token = hashlib.md5(f"{user_id}{SECRET_KEY}".encode()).hexdigest()
++    return {"access_token": token, "expires_in": 3600}
++
++def revoke_session(session_id):
++    # No authorization check - any user can revoke any session
++    db.execute("DELETE FROM user_sessions WHERE id = %s", session_id)
++    return {"status": "revoked"}
+diff --git a/src/auth/session_manager.py b/src/auth/session_manager.py
+new file mode 100644
+index 0000000..d4e5f6a
+--- /dev/null
++++ b/src/auth/session_manager.py
+@@ -0,0 +1,15 @@
++# Session Manager
++import db
++
++def get_active_sessions(user_id):
++    # Returns all active sessions for a user
++    # WARNING: Exposes internal session IDs and IP addresses without masking
++    return db.query(
++        "SELECT id, ip_address, user_agent, refresh_token, created_at FROM user_sessions WHERE user_id = %s",
++        user_id
++    )
++
++def cleanup_expired():
++    # Bulk delete without audit logging
++    db.execute("DELETE FROM user_sessions WHERE expires_at < NOW()")
++    return {"status": "cleaned"}
+""",
+        "file_contents": {
+            "src/auth/token_refresh.py": "",
+            "src/auth/session_manager.py": ""
         }
+    },
+    4: {
+        "number": 4,
+        "title": "Refactor checkout flow and update cart API contracts",
+        "body": "Refactors checkout logic to support discount codes and multi-currency. Updates the /api/v1/checkout endpoint contract to include new fields.",
+        "state": "open",
+        "branch": "feat/checkout-refactor",
+        "diff_files": ["src/cart/checkout.py", "src/api/checkout_handler.py"],
+        "diff": """diff --git a/src/cart/checkout.py b/src/cart/checkout.py
+new file mode 100644
+index 0000000..b7c8d9e
+--- /dev/null
++++ b/src/cart/checkout.py
+@@ -0,0 +1,19 @@
++# Checkout Flow Refactor
++import db
++
++def process_checkout(cart_id, payment_method_token, discount_code=None):
++    # Mismatch: cart_items table doesn't have 'discount_applied' column
++    db.execute(
++        "INSERT INTO cart_items (cart_id, product_id, quantity, price_at_addition, discount_applied) "
++        "VALUES (%s, 99, 1, 10.00, 0.20)",
++        cart_id
++    )
++    # Apply discount without validating discount_code against promotions table
++    if discount_code:
++        db.execute("UPDATE cart_totals SET discount = 0.15 WHERE cart_id = %s", cart_id)
++
++    # API call mismatch: /api/v1/checkout contract requires 'cart_id' but we omit it
++    return api_post("/api/v1/checkout", data={
++        "payment_method_token": payment_method_token,
++        "currency": "USD"
++    })
+diff --git a/src/api/checkout_handler.py b/src/api/checkout_handler.py
+new file mode 100644
+index 0000000..e1f2a3b
+--- /dev/null
++++ b/src/api/checkout_handler.py
+@@ -0,0 +1,16 @@
++# Checkout API Handler
++from flask import request, jsonify
++
++def handle_checkout():
++    data = request.json
++    # Missing input validation - no schema check on request body
++    cart_id = data.get("cart_id")  # This field is NOT sent by the client
++    token = data["payment_method_token"]  # KeyError if missing
++
++    # Process payment without idempotency key
++    result = payment_gateway.charge(token, amount=data.get("amount"))
++
++    # Return internal error details to client
++    if result.get("error"):
++        return jsonify({"error": result["error"], "internal_trace": result.get("stack_trace")}), 500
++    return jsonify({"status": "success", "transaction_id": result["id"]})
+""",
+        "file_contents": {
+            "src/cart/checkout.py": "",
+            "src/api/checkout_handler.py": ""
+        }
+    },
+    5: {
+        "number": 5,
+        "title": "Add user data export endpoint for GDPR compliance",
+        "body": "Implements a /api/v1/users/export endpoint to allow users to download their personal data. Touches auth, database queries, and API layer for GDPR right-to-access compliance.",
+        "state": "open",
+        "branch": "feat/gdpr-data-export",
+        "diff_files": ["src/api/user_export.py", "src/auth/permissions.py", "src/database/user_queries.py"],
+        "diff": """diff --git a/src/api/user_export.py b/src/api/user_export.py
+new file mode 100644
+index 0000000..c2d3e4f
+--- /dev/null
++++ b/src/api/user_export.py
+@@ -0,0 +1,24 @@
++# GDPR Data Export Endpoint
++import db
++import json
++from datetime import datetime
++
++def export_user_data(requesting_user_id, target_user_id):
++    # WARNING: No check that requesting_user == target_user (IDOR vulnerability)
++    # Any authenticated user can export any other user's data
++    profile = db.query("SELECT * FROM users WHERE id = %s", target_user_id)
++    orders = db.query("SELECT * FROM orders WHERE user_id = %s", target_user_id)
++    sessions = db.query("SELECT * FROM user_sessions WHERE user_id = %s", target_user_id)
++    # Includes password_hash and internal_notes in export
++    billing = db.query("SELECT * FROM billing_profiles WHERE user_id = %s", target_user_id)
++
++    export = {
++        "exported_at": datetime.now().isoformat(),
++        "profile": profile,
++        "orders": orders,
++        "sessions": sessions,
++        "billing": billing
++    }
++    # No rate limiting on export endpoint
++    # No audit log of who requested the export
++    return json.dumps(export)
+diff --git a/src/auth/permissions.py b/src/auth/permissions.py
+new file mode 100644
+index 0000000..f5a6b7c
+--- /dev/null
++++ b/src/auth/permissions.py
+@@ -0,0 +1,11 @@
++# Permission Checks
++
++def can_export_data(requesting_user, target_user):
++    # TODO: Implement proper ownership check
++    # Currently returns True for all authenticated users
++    return True
++
++def is_admin(user):
++    # Client-side role check instead of RBAC middleware
++    return user.get("role") == "admin"
+diff --git a/src/database/user_queries.py b/src/database/user_queries.py
+new file mode 100644
+index 0000000..a8b9c0d
+--- /dev/null
++++ b/src/database/user_queries.py
+@@ -0,0 +1,14 @@
++# User Data Queries
++import db
++
++def get_user_full_profile(user_id):
++    # WARNING: SELECT * exposes password_hash, internal_notes, and ssn_last4
++    return db.query("SELECT * FROM users WHERE id = %s", user_id)
++
++def get_user_pii_fields(user_id):
++    # Direct access to PII columns without RBAC check
++    return db.query(
++        "SELECT email, phone, address, ssn_last4, date_of_birth "
++        "FROM users WHERE id = %s",
++        user_id
++    )
+""",
+        "file_contents": {
+            "src/api/user_export.py": "",
+            "src/auth/permissions.py": "",
+            "src/database/user_queries.py": ""
+        }
+    },
+    6: {
+        "number": 6,
+        "title": "Add admin metrics dashboard with performance queries",
+        "body": "Creates a new admin-only dashboard endpoint with aggregated metrics. Includes database performance queries and caching layer.",
+        "state": "open",
+        "branch": "feat/admin-metrics",
+        "diff_files": ["src/admin/metrics_dashboard.py"],
+        "diff": """diff --git a/src/admin/metrics_dashboard.py b/src/admin/metrics_dashboard.py
+new file mode 100644
+index 0000000..d1e2f3a
+--- /dev/null
++++ b/src/admin/metrics_dashboard.py
+@@ -0,0 +1,28 @@
++# Admin Metrics Dashboard
++import db
++from functools import lru_cache
++
++def get_dashboard_metrics(requester_role):
++    # Client-side role check — should use @requires_role('admin') decorator
++    if requester_role != "admin":
++        return {"error": "Unauthorized"}
++
++    # Unbounded query - no LIMIT clause, could return millions of rows
++    all_orders = db.query("SELECT * FROM orders")
++    all_users = db.query("SELECT * FROM users")
++
++    # Exposing internal system metrics without rate limiting
++    metrics = {
++        "total_users": len(all_users),
++        "total_orders": len(all_orders),
++        "revenue": sum(o.get("total_usd", 0) for o in all_orders),
++        # Leaking PII in aggregation response
++        "top_spenders": db.query(
++            "SELECT u.email, u.phone, SUM(o.total_usd) as total "
++            "FROM users u JOIN orders o ON u.id = o.user_id "
++            "GROUP BY u.email, u.phone ORDER BY total DESC LIMIT 10"
++        ),
++        "db_connection_pool": db.get_pool_stats(),  # Internal diagnostics leaked
++        "cache_hit_rate": get_cache_stats()
++    }
++    return metrics
+""",
+        "file_contents": {"src/admin/metrics_dashboard.py": ""}
+    },
+}
+
+
+def get_mock_pr_data(number: int) -> Dict[str, Any]:
+    """Return mock PR data by number, falling back to PR #2 for unknown numbers."""
+    if number in MOCK_PR_CATALOG:
+        return MOCK_PR_CATALOG[number]
+    # Default fallback
+    return MOCK_PR_CATALOG[2]
+
+
+def get_mock_pr_list() -> list:
+    """Return the mock PR catalog as a list suitable for the PR list endpoint."""
+    return [
+        {
+            "number": pr["number"],
+            "title": pr["title"],
+            "state": pr["state"],
+            "html_url": f"https://github.com/vjb/WellActually.ai/pull/{pr['number']}"
+        }
+        for pr in MOCK_PR_CATALOG.values()
+    ]
 
 
 # Endpoints for Dynamic PR & Repository Loading
@@ -1245,6 +1501,7 @@ async def get_github_prs(repo: str):
     import urllib.error
     import json
     from src.config import config
+    from starlette.responses import JSONResponse
     
     url = f"https://api.github.com/repos/{repo}/pulls"
     gh_token = config.get("GH_TOKEN")
@@ -1269,10 +1526,17 @@ async def get_github_prs(repo: str):
                 "state": item.get("state"),
                 "html_url": item.get("html_url")
             })
+        # If GitHub returned zero open PRs, merge in mock catalog
+        if len(prs) == 0:
+            logger.info("GitHub returned 0 open PRs, supplementing with mock catalog.")
+            prs = get_mock_pr_list()
+            return JSONResponse(content=prs, headers={"X-GitHub-Fallback": "true"})
         return prs
     except Exception as e:
-        logger.error(f"Failed to fetch PRs from GitHub API for repo {repo}: {e}")
-        raise HTTPException(status_code=502, detail=f"GitHub API Error: {str(e)}")
+        logger.warning(f"GitHub API unreachable for repo {repo}: {e}. Using mock PR catalog.")
+        prs = get_mock_pr_list()
+        return JSONResponse(content=prs, headers={"X-GitHub-Fallback": "true"})
+
 
 
 @app.get("/api/github/pr-details")

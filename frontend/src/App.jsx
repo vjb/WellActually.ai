@@ -845,7 +845,7 @@ function App() {
             WellActually.ai
           </h1>
           <p style={{ margin: "0.15rem 0 0 0", color: "#6b7280", fontSize: "0.78rem", fontWeight: 500, letterSpacing: "0.03em" }}>
-            Just-in-Time Governance Swarm Intelligence · Powered by Band.ai
+            Just-in-Time Swarm Intelligence · Powered by Band.ai
           </p>
         </div>
 

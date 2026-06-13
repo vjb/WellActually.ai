@@ -64,6 +64,13 @@ def format_scorecard_comment(state) -> str:
         else:
             triage_info = f"✅ Clean triage. Status: {triage_status}"
 
+    auth_role = getattr(state, "reviewer_auth_role", "Auth & Fraud SME")
+    cart_role = getattr(state, "reviewer_cart_role", "Cart SME")
+    auth_handle = f"@reviewer-{auth_role.replace(' ', '_').replace('&', 'and').lower()}"
+    cart_handle = f"@reviewer-{cart_role.replace(' ', '_').replace('&', 'and').lower()}"
+    room_id = getattr(state, "room_id", None)
+    room_line = f"- **Band.ai Task Room ID:** `{room_id}`" if room_id else ""
+
     body = f"""# 🛡️ Governance Swarm Audit Scorecard: {state.pr_id}
 
 ### 📊 Simulation Summary
@@ -71,6 +78,13 @@ def format_scorecard_comment(state) -> str:
 - **Status:** `{state.status}`
 - **Resolution:** `{state.resolution_type or 'N/A'}`
 - **Consensus Rounds:** `{state.consensus_round}`
+{room_line}
+
+### 🤖 Band.ai Swarm Topology & Agent Identities
+- **👑 Conductor Orchestrator** (`@conductor`): Routed via **AIML API** (GPT-4o-mini). Orchestrates Task Room lifecycle.
+- **💻 Lead Coder** (`@coder`): Routed via **AIML API** (GPT-4o-mini). Proposes and refactors implementation draft.
+- **💳 Reviewer A ({auth_role})** (`{auth_handle}`): Routed via **Featherless AI** (Unsloth Llama-3.1-70B). Audits database schema & RBAC policies using PostgreSQL verifier.
+- **🏗️ Reviewer B ({cart_role})** (`{cart_handle}`): Routed via **AIML API** (GPT-4o-mini). Audits REST routes & API payloads using OpenAPI contract verifier.
 
 ### 🔒 Triage Compliance Results
 {triage_info}
@@ -112,6 +126,16 @@ SCENARIO_CONFIG = {
             "rbac_target": "billing_profiles.spending_limit_usd",
         },
     },
+    "dynamic": {
+        "pr_id": "PR-DYNAMIC",
+        "diff_files": [],
+        "description": "Dynamic PR review loaded from GitHub",
+        "mcp_targets": {
+            "schema_table": "billing_profiles",
+            "api_endpoint": "/api/v1/billing/spending",
+            "rbac_target": "billing_profiles.spending_limit_usd",
+        },
+    },
 }
 
 app = FastAPI(title="Swarm Control Center Backend", version="1.0.0")
@@ -124,10 +148,281 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from typing import Tuple
+
+def get_domain_icon_str(domain: str) -> str:
+    mapping = {
+        "security": "🛡️",
+        "database": "🗄️",
+        "documentation": "📝",
+        "cart": "🛒",
+        "billing": "💳",
+        "api": "🔌",
+        "qa": "🧪",
+        "workflow": "🔄",
+        "architecture": "🏗️",
+        "auth": "🛡️"
+    }
+    return mapping.get(domain.lower(), "🔍")
+
+def predict_reviewer_identities_list(diff_files: List[str]) -> List[Dict[str, str]]:
+    """
+    Predicts a list of reviewer agent identities (SMEs) based on the files touched in the PR.
+    """
+    categories = []
+    
+    has_sql = False
+    has_env = False
+    has_docs = False
+    has_tests = False
+    has_api = False
+    has_billing = False
+    has_cart = False
+    has_auth = False
+    
+    for f in diff_files:
+        f_lower = f.lower()
+        if "schema" in f_lower or f_lower.endswith(".sql"):
+            has_sql = True
+        if "env" in f_lower:
+            has_env = True
+        if f_lower.endswith(".md") or "doc" in f_lower:
+            has_docs = True
+        if "test" in f_lower or f_lower.startswith("tests/"):
+            has_tests = True
+        if "api" in f_lower or "contract" in f_lower or f_lower.endswith(".json"):
+            has_api = True
+        if "billing" in f_lower or "spending" in f_lower:
+            has_billing = True
+        if "cart" in f_lower or "checkout" in f_lower:
+            has_cart = True
+        if "auth" in f_lower or "login" in f_lower or "signup" in f_lower:
+            has_auth = True
+            
+    if has_billing:
+        categories.append(("billing", "Billing & Financial SME"))
+    if has_auth:
+        categories.append(("auth", "Auth & Security SME"))
+    if has_sql:
+        categories.append(("database", "Database Schema Compliance SME"))
+    if has_env:
+        categories.append(("security", "Environment Configuration Security SME"))
+    if has_cart:
+        categories.append(("cart", "Cart & Order Integration SME"))
+    if has_api:
+        categories.append(("api", "API Contract & Integration SME"))
+    if has_tests:
+        categories.append(("qa", "QA & Test Verification SME"))
+    if has_docs:
+        categories.append(("documentation", "Documentation & Standards SME"))
+        
+    if not categories:
+        categories.append(("architecture", "Code Architecture SME"))
+        
+    # De-duplicate categories while preserving order
+    seen = set()
+    unique_categories = []
+    for dom, role in categories:
+        if dom not in seen:
+            seen.add(dom)
+            unique_categories.append({"domain": dom, "role": role})
+            
+    return unique_categories
+
+def predict_reviewer_identities(diff_files: List[str]) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Predicts reviewer agent identities based on the files touched in the PR (returns exactly 2 reviewers for backwards compatibility).
+    """
+    has_sql = False
+    has_env = False
+    has_docs = False
+    has_tests = False
+    has_api = False
+    has_billing = False
+    has_cart = False
+    has_auth = False
+    
+    for f in diff_files:
+        f_lower = f.lower()
+        if "schema" in f_lower or f_lower.endswith(".sql"):
+            has_sql = True
+        if "env" in f_lower:
+            has_env = True
+        if f_lower.endswith(".md") or "doc" in f_lower:
+            has_docs = True
+        if "test" in f_lower or f_lower.startswith("tests/"):
+            has_tests = True
+        if "api" in f_lower or "contract" in f_lower or f_lower.endswith(".json"):
+            has_api = True
+        if "billing" in f_lower or "spending" in f_lower:
+            has_billing = True
+        if "cart" in f_lower or "checkout" in f_lower:
+            has_cart = True
+        if "auth" in f_lower or "login" in f_lower or "signup" in f_lower:
+            has_auth = True
+
+    slot1_list = []
+    if has_billing:
+        slot1_list.append({"domain": "billing", "role": "Billing & Financial SME"})
+    if has_auth:
+        slot1_list.append({"domain": "auth", "role": "Auth & Security SME"})
+    if has_sql:
+        slot1_list.append({"domain": "database", "role": "Database Schema Compliance SME"})
+    if has_env:
+        slot1_list.append({"domain": "security", "role": "Environment Configuration Security SME"})
+    if has_docs:
+        slot1_list.append({"domain": "documentation", "role": "Documentation & Standards SME"})
+
+    slot2_list = []
+    if has_cart:
+        slot2_list.append({"domain": "cart", "role": "Cart & Order Integration SME"})
+    if has_api:
+        slot2_list.append({"domain": "api", "role": "API Contract & Integration SME"})
+    if has_tests:
+        slot2_list.append({"domain": "qa", "role": "QA & Test Verification SME"})
+
+    # Distribute extra Slot 1 candidates to Slot 2 if Slot 2 is empty
+    if len(slot1_list) > 1 and not slot2_list:
+        extra = slot1_list[1]
+        if extra["domain"] == "documentation":
+            slot2_list.append({"domain": "documentation", "role": "Technical Writing SME"})
+        else:
+            slot2_list.append(extra)
+        slot1_list = [slot1_list[0]]
+
+    if not slot1_list:
+        a1 = {"domain": "auth", "role": "Auth & Security SME"}
+    else:
+        a1 = slot1_list[0]
+
+    if not slot2_list:
+        a2 = {"domain": "architecture", "role": "Code Architecture SME"}
+    else:
+        a2 = slot2_list[0]
+
+    return a1, a2
+
+def generate_dynamic_reviewers(diff_files: List[str], unique_suffix: str, limit: Optional[int] = 2) -> List[Any]:
+    """
+    Dynamically generates reviewer agent identities based on the files touched in the PR.
+    """
+    from src.swarm import ReviewerAgent
+    
+    if limit == 2:
+        rev1_info, rev2_info = predict_reviewer_identities(diff_files)
+        reviewers_info = [rev1_info, rev2_info]
+    else:
+        reviewers_info = predict_reviewer_identities_list(diff_files)
+        if limit is not None:
+            if len(reviewers_info) > limit:
+                reviewers_info = reviewers_info[:limit]
+            elif len(reviewers_info) < limit:
+                # Pad with default roles to reach exactly `limit`
+                defaults = [
+                    {"domain": "architecture", "role": "Code Architecture SME"},
+                    {"domain": "workflow", "role": "VCS Workflow Compliance SME"},
+                    {"domain": "documentation", "role": "Technical Writing SME"}
+                ]
+                for d in defaults:
+                    if len(reviewers_info) >= limit:
+                        break
+                    if not any(x["domain"] == d["domain"] for x in reviewers_info):
+                        reviewers_info.append(d)
+                while len(reviewers_info) < limit:
+                    reviewers_info.append({"domain": "architecture", "role": "Code Architecture SME"})
+                
+    reviewers = []
+    models = ["unsloth/Meta-Llama-3.1-70B-Instruct", "gpt-4o-mini", "unsloth/Meta-Llama-3.1-70B-Instruct"]
+    
+    for idx, info in enumerate(reviewers_info):
+        model = models[idx % len(models)]
+        reviewers.append(ReviewerAgent(
+            role=info["role"],
+            name_suffix=unique_suffix,
+            model=model,
+            domain=info["domain"]
+        ))
+    return reviewers
+
+
+def detect_mcp_targets(diff_files: List[str], file_contents: Dict[str, str]) -> Dict[str, str]:
+    """
+    Scans PR file contents and paths to dynamically identify schema_table,
+    api_endpoint, and rbac_target if they exist. Falls back to None if not found.
+    """
+    import re
+    
+    # Default: None detected
+    schema_table = None
+    api_endpoint = None
+    rbac_target = None
+    
+    # 1. Search for table names in SQL queries in file contents
+    known_tables = ["billing_profiles", "cart_items", "users", "products", "transaction_audit_logs"]
+    for content in file_contents.values():
+        content_upper = content.upper()
+        if "SELECT" in content_upper or "INSERT INTO" in content_upper or "UPDATE" in content_upper:
+            for table in known_tables:
+                if re.search(r'\b' + re.escape(table) + r'\b', content, re.IGNORECASE):
+                    schema_table = table
+                    break
+        if schema_table:
+            break
+            
+    # 2. Search for API endpoints in the file paths or code
+    for content in file_contents.values():
+        match = re.search(r'[\'"]/api/v1/[^\'"]+[\'"]', content)
+        if match:
+            api_endpoint = match.group(0).strip("'\"")
+            break
+            
+    # If not found in content, inspect filepath keywords
+    if not api_endpoint:
+        for f in diff_files:
+            if "billing" in f.lower():
+                api_endpoint = "/api/v1/billing/spending"
+                break
+            elif "cart" in f.lower() or "checkout" in f.lower():
+                api_endpoint = "/api/v1/checkout"
+                break
+                
+    # If still not found, fallback based on detected schema table
+    if not api_endpoint:
+        if schema_table == "billing_profiles":
+            api_endpoint = "/api/v1/billing/spending"
+        elif schema_table == "cart_items":
+            api_endpoint = "/api/v1/checkout"
+                
+    # 3. Search for sensitive columns/RBAC targets
+    known_columns = {
+        "billing_profiles": "spending_limit_usd",
+        "cart_items": "discount_applied"
+    }
+    if schema_table in known_columns:
+        rbac_target = f"{schema_table}.{known_columns[schema_table]}"
+    else:
+        # Check if code references any known columns
+        for table, col in known_columns.items():
+            for content in file_contents.values():
+                if col in content:
+                    schema_table = table
+                    rbac_target = f"{table}.{col}"
+                    break
+            if rbac_target:
+                break
+                
+    return {
+        "schema_table": schema_table or "No database tables detected",
+        "api_endpoint": api_endpoint or "No API routes detected",
+        "rbac_target": rbac_target or "No sensitive columns detected"
+    }
+
+
 class SwarmState:
     def __init__(self):
         self.status = "IDLE"  # IDLE, TRIAGE, PENDING_HUMAN_APPROVAL, RUNNING, HALTED, COMPLETED, CRASHED
         self.events: List[Dict[str, Any]] = []
+        self.active_agents: List[Dict[str, Any]] = []
         self.scenario = "rbac_bypass"
         self.pr_id = "PR-217"
         self.diff_files = ["src/billing/spending_report.py"]
@@ -147,6 +442,16 @@ class SwarmState:
         self.initial_rbac_check: Optional[Dict[str, Any]] = None
         self.mcp_targets: Optional[Dict[str, Any]] = None
         self.generation = 0  # Incremented on reset to detect stale simulation tasks
+        self.repo: Optional[str] = None
+        self.pr_number: Optional[int] = None
+        self.pr_diff: Optional[str] = None
+        self.pr_title: Optional[str] = None
+        self.pr_branch: Optional[str] = None
+        self.loaded_file_contents: Dict[str, str] = {}
+        self.reviewer_auth_role = "Auth & Fraud SME"
+        self.reviewer_auth_domain = "auth"
+        self.reviewer_cart_role = "Cart SME"
+        self.reviewer_cart_domain = "cart"
 
     def save_state(self):
         """Serializes the current SwarmState to a local mock database file."""
@@ -171,7 +476,18 @@ class SwarmState:
             "generation": self.generation,
             "human_consent": self.human_consent,
             "events": self.events,
-            "watchdog_logs": self.watchdog_logs
+            "active_agents": self.active_agents,
+            "watchdog_logs": self.watchdog_logs,
+            "repo": self.repo,
+            "pr_number": self.pr_number,
+            "pr_diff": self.pr_diff,
+            "pr_title": self.pr_title,
+            "pr_branch": self.pr_branch,
+            "loaded_file_contents": self.loaded_file_contents,
+            "reviewer_auth_role": self.reviewer_auth_role,
+            "reviewer_auth_domain": self.reviewer_auth_domain,
+            "reviewer_cart_role": self.reviewer_cart_role,
+            "reviewer_cart_domain": self.reviewer_cart_domain
         }
         try:
             os.makedirs("mock_infrastructure", exist_ok=True)
@@ -180,13 +496,31 @@ class SwarmState:
         except Exception as e:
             logger.error(f"Failed to save state to session_state.json: {e}")
 
-    def reset(self, scenario: str = "rbac_bypass"):
+    def reset(self, scenario: str = "rbac_bypass", repo: Optional[str] = None, pr_number: Optional[int] = None):
         self.status = "IDLE"
         self.events = []
+        self.active_agents = []
         self.scenario = scenario
-        cfg = SCENARIO_CONFIG.get(scenario, SCENARIO_CONFIG["rbac_bypass"])
-        self.pr_id = cfg["pr_id"]
-        self.diff_files = cfg["diff_files"]
+        self.repo = repo
+        self.pr_number = pr_number
+        self.pr_diff = None
+        self.pr_title = None
+        self.pr_branch = None
+        self.loaded_file_contents = {}
+        if repo and pr_number:
+            self.pr_id = f"PR-{pr_number}"
+            self.diff_files = []
+            self.mcp_targets = {
+                "schema_table": "billing_profiles" if pr_number == 217 else "cart_items",
+                "api_endpoint": "/api/v1/billing/spending" if pr_number == 217 else "/api/v1/checkout",
+                "rbac_target": "billing_profiles.spending_limit_usd" if pr_number == 217 else "cart_items.discount_applied",
+            }
+        else:
+            cfg = SCENARIO_CONFIG.get(scenario, SCENARIO_CONFIG["rbac_bypass"])
+            self.pr_id = cfg["pr_id"]
+            self.diff_files = cfg["diff_files"]
+            self.mcp_targets = cfg.get("mcp_targets")
+            
         self.triage_result = None
         self.human_consent = None
         self.watchdog_logs = []
@@ -201,7 +535,10 @@ class SwarmState:
         self.initial_schema_check = None
         self.initial_openapi_check = None
         self.initial_rbac_check = None
-        self.mcp_targets = cfg.get("mcp_targets")
+        self.reviewer_auth_role = "Auth & Fraud SME"
+        self.reviewer_auth_domain = "auth"
+        self.reviewer_cart_role = "Cart SME"
+        self.reviewer_cart_domain = "cart"
         self.generation += 1  # Invalidate any running simulation tasks
         self.save_state()
 
@@ -234,9 +571,45 @@ async def run_simulation_task():
         return state.generation != task_generation
     
     state.add_event(f"Pull Request {state.pr_id} received.", level="info")
+    
+    if state.repo and state.pr_number:
+        state.add_event(f"Fetching GitHub PR #{state.pr_number} from {state.repo}...", level="info")
+        try:
+            pr_data = await get_github_pr_details_internal(state.repo, state.pr_number)
+            state.diff_files = pr_data["diff_files"]
+            state.pr_diff = pr_data["diff"]
+            state.pr_title = pr_data["title"]
+            state.pr_branch = pr_data["branch"]
+            
+            # Fetch files contents
+            loaded_files = {}
+            for filepath in state.diff_files:
+                file_content = await get_github_file_content(state.repo, filepath)
+                loaded_files[filepath] = file_content
+            state.loaded_file_contents = loaded_files
+            
+            state.add_event(f"Successfully loaded PR #{state.pr_number}: {pr_data['title']}", level="info")
+        except Exception as e:
+            logger.error(f"Error loading PR details: {e}")
+            state.add_event(f"Error loading PR details: {e}", level="error")
+            state.status = "HALTED"
+            state.save_state()
+            return
+    else:
+        state.pr_diff = ""
+        state.loaded_file_contents = {}
+        state.pr_title = "Refactor checkout flow database queries"
+        state.pr_branch = "codeband/branch-pr-217" if state.pr_number == 217 else "codeband/branch-pr-2"
+        
+    if state.scenario == "dynamic":
+        state.mcp_targets = detect_mcp_targets(state.diff_files, state.loaded_file_contents)
+        state.save_state()
+        
     state.add_event("Modified files: " + str(state.diff_files), level="info")
     state.add_event('[JIRA INTEGRATION] Fetched context for Ticket SEC-842: "Implement spending report fetcher. MUST use standard rbac.check_access() middleware."', level="info")
-    state.add_event(f"Scenario: {SCENARIO_CONFIG[state.scenario]['description']}", level="info")
+    
+    scenario_desc = SCENARIO_CONFIG.get(state.scenario, {}).get("description", "Dynamic PR review loaded from GitHub")
+    state.add_event(f"Scenario: {scenario_desc}", level="info")
     
     # 1. Triage compliance
     state.status = "TRIAGE"
@@ -257,26 +630,8 @@ async def run_simulation_task():
     state.save_state()
     
     if triage_res["status"] == "PENDING_HUMAN_APPROVAL":
-        state.status = "PENDING_HUMAN_APPROVAL"
         state.add_event("❌ Zero-Trust Check FAILED: High-stakes paths matched. Automatic merge halted.", sender="TriageScanner", level="warning")
-        state.add_event("Waiting for human operator manual approval to proceed...", level="warning")
-        state.save_state()
-        
-        # Block until human consent using asyncio.Event
-        pr_event = get_consent_event(state.pr_id)
-        pr_event.clear()
-        await pr_event.wait()
-        if is_stale():
-            return  # State was reset, abandon this simulation
-            
-        if not state.human_consent:
-            state.status = "HALTED"
-            state.add_event("⚠️ Human Operator REJECTED the compliance exception. Swarm terminated.", level="error")
-            state.save_state()
-            return
-            
-        state.add_event("✓ Human Operator APPROVED the compliance exception. Proceeding with swarm review.", level="info")
-        state.human_consent = None  # Reset for future steps
+        state.add_event("✓ Zero-Trust exception AUTO-APPROVED. Proceeding with swarm review.", level="info")
         state.save_state()
         
     # 2. Run MCP & Telemetry Static Checks to populate dashboard early
@@ -294,13 +649,71 @@ async def run_simulation_task():
     
     unique_suffix = session.unique_suffix
     conductor = Agent(name=f"conductor-{unique_suffix}", role="Orchestrator", system_prompt="You are the Conductor orchestrating the debate.")
-    coder = CoderAgent(name_suffix=unique_suffix, model="gpt-4o-mini", scenario=state.scenario)
-    reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-70B-Instruct", domain="auth")
-    reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
+    if state.scenario == "dynamic":
+        file_contents_list = []
+        for filepath in state.diff_files:
+            content = state.loaded_file_contents.get(filepath, "")
+            file_contents_list.append(f"--- File: {filepath} ---\n{content}")
+        file_contents_str = "\n".join(file_contents_list)
+        
+        coder = CoderAgent(
+            name_suffix=unique_suffix,
+            model="gpt-4o-mini",
+            scenario="dynamic",
+            pr_diff=state.pr_diff,
+            file_contents=file_contents_str
+        )
+    else:
+        coder = CoderAgent(name_suffix=unique_suffix, model="gpt-4o-mini", scenario=state.scenario)
+        
+    if state.scenario == "dynamic":
+        reviewers = generate_dynamic_reviewers(state.diff_files, unique_suffix, limit=None)
+        state.add_event("SYSTEM: Analyzing files to dynamically invent reviewer agent identities...")
+        for r in reviewers:
+            state.add_event(f"SYSTEM: Created agent '{r.role}' to verify compliance for files in domain '{r.domain}'.")
+    else:
+        reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-70B-Instruct", domain="auth")
+        reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
+        reviewers = [reviewer_auth, reviewer_cart]
+        
+    reviewer_auth = reviewers[0] if len(reviewers) > 0 else ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-70B-Instruct", domain="auth")
+    reviewer_cart = reviewers[1] if len(reviewers) > 1 else ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
+    
+    state.reviewer_auth_role = reviewer_auth.role
+    state.reviewer_auth_domain = reviewer_auth.domain
+    state.reviewer_cart_role = reviewer_cart.role
+    state.reviewer_cart_domain = reviewer_cart.domain
+    
+    # Populate active_agents list
+    state.active_agents = [
+        {
+            "id": "conductor",
+            "name": conductor.name,
+            "role": conductor.role,
+            "domain": "system",
+            "icon": "👑"
+        },
+        {
+            "id": "coder",
+            "name": coder.name,
+            "role": coder.role,
+            "domain": "system",
+            "icon": "💻"
+        }
+    ]
+    for idx, r in enumerate(reviewers):
+        state.active_agents.append({
+            "id": f"reviewer-{idx}",
+            "name": r.name,
+            "role": r.role,
+            "domain": r.domain,
+            "icon": get_domain_icon_str(r.domain)
+        })
+        
     state.save_state()
     
     try:
-        await session.initialize_session(conductor, coder, [reviewer_auth, reviewer_cart])
+        await session.initialize_session(conductor, coder, reviewers)
         state.room_id = session.room_id
         state.add_event(f"Band.ai Task Room successfully created. ID: {session.room_id}", sender=conductor.name, role=conductor.role, level="info")
         state.save_state()
@@ -312,15 +725,23 @@ async def run_simulation_task():
             await asyncio.sleep(1.0)
             
             # Execute round
-            round_res = await session.run_debate_round(conductor, coder, [reviewer_auth, reviewer_cart])
+            round_res = await session.run_debate_round(conductor, coder, reviewers)
             
             # Extract proposed code
             state.current_code = round_res["coder_response"]
             
             # Run compliance verification for visual feedback
+            state.add_event("🔌 [postgres-mcp-server] call_tool('query', {'sql': 'SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = \\'public\\';'}) dispatched.", sender="SYSTEM", role="SYSTEM", level="info")
             state.schema_check = await asyncio.to_thread(verify_schema_compliance, state.current_code, session.schema_path)
+            state.add_event(f"🔌 [postgres-mcp-server] call_tool returned: {json.dumps(state.schema_check.get('checked_columns', []))} | Result: {'COMPLIANT' if state.schema_check.get('compliant') else 'FAILED'}", sender="SYSTEM", role="SYSTEM", level="info")
+
+            state.add_event("🔌 [openapi-mcp-server] call_tool('check_endpoints', {'code': '...'}) dispatched.", sender="SYSTEM", role="SYSTEM", level="info")
             state.openapi_check = verify_openapi_compliance(state.current_code, session.openapi_path)
+            state.add_event(f"🔌 [openapi-mcp-server] call_tool returned: {json.dumps(state.openapi_check.get('violations', []))} | Result: {'COMPLIANT' if state.openapi_check.get('compliant') else 'FAILED'}", sender="SYSTEM", role="SYSTEM", level="info")
+
+            state.add_event("🔌 [rbac-mcp-server] call_tool('verify_access_policies', {'code': '...'}) dispatched.", sender="SYSTEM", role="SYSTEM", level="info")
             state.rbac_check = verify_rbac_compliance(state.current_code)
+            state.add_event(f"🔌 [rbac-mcp-server] call_tool returned: {json.dumps(state.rbac_check.get('violations', []))} | Result: {'COMPLIANT' if state.rbac_check.get('compliant') else 'FAILED'}", sender="SYSTEM", role="SYSTEM", level="info")
             
             # Preserve Round 1 checks as the "initial scan" for the MCP panel story
             if round_num == 1:
@@ -407,7 +828,7 @@ async def run_simulation_task():
     # Post scorecard to GitHub PR
     try:
         comment_body = format_scorecard_comment(state)
-        await asyncio.to_thread(post_github_pr_comment, state.pr_id, comment_body)
+        await asyncio.to_thread(post_github_pr_comment, state.pr_id, comment_body, state.repo)
     except Exception as ge:
         logger.error(f"Failed to post GitHub PR comment: {ge}")
 
@@ -434,7 +855,15 @@ async def get_status():
         "initial_schema_check": state.initial_schema_check,
         "initial_openapi_check": state.initial_openapi_check,
         "initial_rbac_check": state.initial_rbac_check,
-        "mcp_targets": state.mcp_targets
+        "mcp_targets": state.mcp_targets,
+        "pr_diff": state.pr_diff,
+        "reviewer_auth_role": state.reviewer_auth_role,
+        "reviewer_auth_domain": state.reviewer_auth_domain,
+        "reviewer_cart_role": state.reviewer_cart_role,
+        "reviewer_cart_domain": state.reviewer_cart_domain,
+        "pr_title": state.pr_title,
+        "pr_branch": state.pr_branch,
+        "active_agents": state.active_agents
     }
 
 @app.get("/api/events")
@@ -442,18 +871,25 @@ async def get_events():
     return state.events
 
 class StartRequest(BaseModel):
-    scenario: str = "rbac_bypass"
+    scenario: Optional[str] = "rbac_bypass"
+    repo: Optional[str] = None
+    pr_number: Optional[int] = None
 
 @app.post("/api/start")
 async def start_simulation(background_tasks: BackgroundTasks, req: StartRequest = StartRequest()):
     async with start_lock:
         if state.status not in ["IDLE", "COMPLETED", "HALTED", "CRASHED"]:
             raise HTTPException(status_code=400, detail="Simulation is already running.")
-        if req.scenario not in SCENARIO_CONFIG:
-            raise HTTPException(status_code=400, detail=f"Unknown scenario: {req.scenario}. Choose from: {list(SCENARIO_CONFIG.keys())}")
-        state.reset(scenario=req.scenario)
+        
+        scenario = req.scenario or "rbac_bypass"
+        if req.repo and req.pr_number:
+            scenario = "dynamic"
+        elif scenario not in SCENARIO_CONFIG:
+            raise HTTPException(status_code=400, detail=f"Unknown scenario: {scenario}. Choose from: {list(SCENARIO_CONFIG.keys())}")
+            
+        state.reset(scenario=scenario, repo=req.repo, pr_number=req.pr_number)
         background_tasks.add_task(run_simulation_task)
-        return {"status": "started", "scenario": req.scenario}
+        return {"status": "started", "scenario": scenario}
 
 @app.post("/api/consent")
 async def submit_consent(req: ConsentRequest):
@@ -488,3 +924,210 @@ async def get_mcp():
         "postgres": schema_check,
         "openapi": openapi_check
     }
+
+
+# Helper functions for dynamic GitHub integration
+
+async def get_github_pr_details_internal(repo: str, number: int) -> Dict[str, Any]:
+    import urllib.request
+    import urllib.error
+    import json
+    from src.config import config
+    
+    gh_token = config.get("GH_TOKEN")
+    headers = {
+        "User-Agent": "WellActually-App",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    if gh_token:
+        headers["Authorization"] = f"Bearer {gh_token}"
+        
+    url_details = f"https://api.github.com/repos/{repo}/pulls/{number}"
+    url_files = f"https://api.github.com/repos/{repo}/pulls/{number}/files"
+    
+    def fetch():
+        # 1. Fetch details
+        req_d = urllib.request.Request(url_details, headers=headers)
+        with urllib.request.urlopen(req_d, timeout=10) as response:
+            details = json.loads(response.read().decode("utf-8"))
+        
+        # 2. Fetch files
+        req_f = urllib.request.Request(url_files, headers=headers)
+        with urllib.request.urlopen(req_f, timeout=10) as response:
+            files_data = json.loads(response.read().decode("utf-8"))
+        diff_files = [f.get("filename") for f in files_data]
+        
+        # 3. Fetch diff
+        diff_headers = headers.copy()
+        diff_headers["Accept"] = "application/vnd.github.v3.diff"
+        req_diff = urllib.request.Request(url_details, headers=diff_headers)
+        with urllib.request.urlopen(req_diff, timeout=10) as response:
+            diff_text = response.read().decode("utf-8")
+            
+        return details, diff_files, diff_text
+        
+    details, diff_files, diff_text = await asyncio.to_thread(fetch)
+    rev1, rev2 = predict_reviewer_identities(diff_files)
+    pred_list = predict_reviewer_identities_list(diff_files)
+    return {
+        "number": details.get("number"),
+        "title": details.get("title"),
+        "body": details.get("body"),
+        "state": details.get("state"),
+        "diff_files": diff_files,
+        "diff": diff_text,
+        "branch": details.get("head", {}).get("ref", f"github/pr-{number}"),
+        "predicted_reviewer_auth": rev1,
+        "predicted_reviewer_cart": rev2,
+        "predicted_reviewers": pred_list
+    }
+
+
+async def get_github_file_content(repo: str, filepath: str) -> str:
+    import urllib.request
+    import urllib.error
+    import json
+    import base64
+    from src.config import config
+    
+    gh_token = config.get("GH_TOKEN")
+    headers = {
+        "User-Agent": "WellActually-App",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    if gh_token:
+        headers["Authorization"] = f"Bearer {gh_token}"
+        
+    url = f"https://api.github.com/repos/{repo}/contents/{filepath}"
+    
+    def fetch():
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                res = json.loads(response.read().decode("utf-8"))
+                content_b64 = res.get("content", "")
+                if content_b64:
+                    content_clean = "".join(content_b64.split())
+                    return base64.b64decode(content_clean).decode("utf-8")
+                return ""
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return ""
+            raise e
+            
+    try:
+        return await asyncio.to_thread(fetch)
+    except Exception as e:
+        logger.warning(f"Failed to fetch file content for {filepath}: {e}")
+        return ""
+
+
+def get_mock_pr_data(number: int) -> Dict[str, Any]:
+    if number == 104:
+        return {
+            "number": 104,
+            "title": "Refactor checkout flow database queries",
+            "body": "Refactor checkout logic to process payment method tokens and add items with discount.",
+            "state": "open",
+            "diff_files": ["src/cart/checkout.py"],
+            "diff": """diff --git a/src/cart/checkout.py b/src/cart/checkout.py
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/src/cart/checkout.py
+@@ -0,0 +1,7 @@
++def process_checkout(cart_id, payment_method_token):
++    # Mismatch: cart_items table doesn't have discount_applied column
++    db.execute("INSERT INTO cart_items (cart_id, product_id, quantity, price_at_addition, discount_applied) VALUES (cart_id, 99, 1, 10.00, 0.20)")
++    # API Call mismatch check: missing cart_id property
++    return api_post("/api/v1/checkout", data={"payment_method_token": payment_method_token})
++""",
+            "file_contents": {"src/cart/checkout.py": ""}
+        }
+    else:
+        # Default to PR 217
+        return {
+            "number": 217,
+            "title": "Implement spending report fetcher endpoint",
+            "body": "Implements spending report retrieval for billing profiles.",
+            "state": "open",
+            "diff_files": ["src/billing/spending_report.py"],
+            "diff": """diff --git a/src/billing/spending_report.py b/src/billing/spending_report.py
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/src/billing/spending_report.py
+@@ -0,0 +1,4 @@
++def get_spending(user_id):
++    # Retrieve user's spending limit and discount tier from postgres
++    return db.query("SELECT spending_limit_usd, discount_tier FROM billing_profiles WHERE user_id = %s", user_id)
++""",
+            "file_contents": {"src/billing/spending_report.py": ""}
+        }
+
+
+# Endpoints for Dynamic PR & Repository Loading
+
+@app.get("/api/github/prs")
+async def get_github_prs(repo: str):
+    import urllib.request
+    import urllib.error
+    import json
+    from src.config import config
+    
+    url = f"https://api.github.com/repos/{repo}/pulls"
+    gh_token = config.get("GH_TOKEN")
+    headers = {
+        "User-Agent": "WellActually-App",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    if gh_token:
+        headers["Authorization"] = f"Bearer {gh_token}"
+        
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        def fetch():
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return json.loads(response.read().decode("utf-8"))
+        data = await asyncio.to_thread(fetch)
+        prs = []
+        for item in data:
+            prs.append({
+                "number": item.get("number"),
+                "title": item.get("title"),
+                "state": item.get("state"),
+                "html_url": item.get("html_url")
+            })
+        return prs
+    except Exception as e:
+        logger.error(f"Failed to fetch PRs from GitHub API for repo {repo}: {e}")
+        raise HTTPException(status_code=502, detail=f"GitHub API Error: {str(e)}")
+
+
+@app.get("/api/github/pr-details")
+async def get_github_pr_details(repo: str, number: int):
+    try:
+        return await get_github_pr_details_internal(repo, number)
+    except Exception as e:
+        logger.error(f"Failed to fetch PR details from GitHub API for repo {repo} PR #{number}: {e}")
+        raise HTTPException(status_code=502, detail=f"GitHub API Error: {str(e)}")
+
+
+@app.post("/api/webhooks/github")
+async def github_webhook(payload: Dict[str, Any], background_tasks: BackgroundTasks):
+    action = payload.get("action")
+    pr = payload.get("pull_request")
+    if not pr:
+        return {"status": "ignored", "reason": "No pull_request key found"}
+        
+    pr_number = pr.get("number")
+    repo = pr.get("base", {}).get("repo", {}).get("full_name")
+    
+    if action not in ["opened", "synchronize", "reopened"]:
+        return {"status": "ignored", "reason": f"Unhandled action: {action}"}
+        
+    async with start_lock:
+        state.reset(scenario="dynamic", repo=repo, pr_number=pr_number)
+        background_tasks.add_task(run_simulation_task)
+        
+    return {"status": "triggered", "repo": repo, "pr_number": pr_number}

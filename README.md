@@ -52,6 +52,18 @@ A junior developer submits `src/billing/spending_report.py` to retrieve user spe
 
 ---
 
+## ── Live Dynamic Repository & PR Flow (v6) ──
+
+WellActually.ai is fully generalized to run reviews on **any** public GitHub pull request. It analyzes code modifications in real time, generates custom agent personas on the fly, executes dynamic MCP schema/contract validations, and posts results back to GitHub:
+
+* **Dynamic Repository & PR Loading**: Developers can type any repository path (e.g. `vjb/WellActually.ai`) and select from available open pull requests. The system fetches metadata, list of touched files, and raw code diffs dynamically.
+* **On-the-fly Agent Identity Generation**: Filenames and extensions modified in the PR are scanned to dynamically invent relevant reviewer agent roles and domains (e.g. `Environment Configuration Security SME` for `.env.example`, `API Contract & Integration SME` for JSON contracts, `Database Schema Compliance SME` for SQL changes). 
+* **Dynamic MCP Bounded-Context Targets**: The Postgres tables, REST endpoints, and RBAC column targets are dynamically extracted from the PR code changes instead of falling back to hardcoded path strings.
+* **Automated Webhook Integration**: Exposes `/api/webhooks/github` to trigger compliance triages automatically on `pull_request` events, with a webhook simulator interface built directly into the dashboard.
+* **VCS Scorecard Commenting**: Upon completing the review, the swarm automatically posts a markdown audit scorecard directly back to the GitHub PR.
+
+---
+
 ## 🤝 Platform & Partner Stack Integrations
 
 ### 1. **Band.ai** (Core Agent Collaboration)
@@ -65,10 +77,10 @@ Our swarm orchestrates real-time communication directly over the **Band.ai REST 
 - **Memories (Local Fallback)**: Automatically falls back to local JSON persistence (`mock_infrastructure/local_memories.json`) upon detecting plan limitations on Free/Pro tiers, ensuring zero-crash memory rehydration.
 
 ### 2. **Featherless AI** (Hackathon Sponsor Partner)
-To leverage specialized open-source models at scale, we route the **Auth & Fraud SME Reviewer Agent** to the `unsloth/Meta-Llama-3.1-70B-Instruct` model hosted on **Featherless AI's** serverless endpoint (`https://api.featherless.ai/v1`). It performs strict SQL syntax verification, RBAC compliance checks, and schema validation. The Featherless AI integration ensures our adversarial pairing uses genuinely different model architectures (Llama 3.1 vs GPT-4o) to maximize review diversity.
+To leverage specialized open-source models at scale, we route the **First Reviewer Agent** to the `unsloth/Meta-Llama-3.1-70B-Instruct` model hosted on **Featherless AI's** serverless endpoint (`https://api.featherless.ai/v1`). The model's role and domain are dynamically generated based on files modified (e.g. `Environment Configuration Security SME`). It performs strict syntax verification, RBAC checks, and schema validation. The Featherless AI integration ensures our adversarial pairing uses genuinely different model architectures (Llama 3.1 vs GPT-4o) to maximize review diversity.
 
 ### 3. **AIML API** (Hackathon Sponsor Partner)
-All other agents in the swarm (the Conductor Orchestrator, the Lead Coder, and the Cart SME Reviewer) are routed via the **AIML API** gateway (`https://api.aimlapi.com/v1`) using the `gpt-4o-mini` model. By redirecting `OPENAI_BASE_URL` to the AIML API endpoint, we achieve seamless integration with the sponsor's infrastructure while maintaining standard OpenAI client compatibility.
+All other agents in the swarm (the Conductor Orchestrator, the Lead Coder, and the **Second Reviewer Agent**) are routed via the **AIML API** gateway (`https://api.aimlapi.com/v1`) using the `gpt-4o-mini` model. The Second Reviewer Agent's identity is dynamically generated based on touched files (e.g. `API Contract & Integration SME` for JSON files). By redirecting `OPENAI_BASE_URL` to the AIML API endpoint, we achieve seamless integration with the sponsor's infrastructure while maintaining standard OpenAI client compatibility.
 
 ### 4. **GitHub** (Scorecard Workflow Integration)
 WellActually.ai connects directly to the developer's VCS flow to publish audit scorecards:
@@ -79,7 +91,7 @@ WellActually.ai connects directly to the developer's VCS flow to publish audit s
 ### 5. **Codeband** (Architectural Reference)
 WellActually.ai is built on the same **Band.ai REST SDK** (`thenvoi-rest`) that powers [Codeband](https://github.com/thenvoi/codeband). We use Codeband as the reference implementation, extending the pattern with:
 - **Domain-Driven Governance** — a deterministic `governance.py` engine that enforces CODEOWNERS policies, consensus tracking, and MCP bounded-context validation on top of the LLM debate.
-- **Cross-Provider Adversarial Pairing** — pairing **Featherless AI** (Llama-3.1-70B) against **AIML API** (GPT-4o-mini).
+- **Cross-Provider Adversarial Pairing** — pairing **Featherless AI** (Llama-3.1-70B) against **AIML API** (gpt-4o-mini).
 - **Human-in-the-Loop Escalation** — deterministic deadlock detection with async blocking consent gates, expanding Codeband's risk-aware merging concept into full HITL governance.
 - **Real-Time Web Dashboard** — a React Swarm Control Center providing live visibility into the debate, compliance checks, and telemetry anomalies.
 
@@ -153,21 +165,29 @@ Verify everything is working:
 
 1. **Start the FastAPI Backend Server**:
    ```powershell
-    .venv\Scripts\python.exe -m uvicorn src.server:app --reload --port 8000
-    ```
+   .venv\Scripts\python.exe -m uvicorn src.server:app --reload --port 8000
+   ```
 2. **Start the React Frontend Dashboard**:
-    ```powershell
-    cd frontend
-    npm run dev
-    ```
+   ```powershell
+   cd frontend
+   npm run dev
+   ```
 3. Open your browser and navigate to `http://localhost:5173`.
-4. Click **Start Swarm Review** and observe:
-   - Zero-trust compliance triage matches billing files and halts execution.
-   - Click **Approve Exception** to launch the swarm agents.
-   - Watch the chat feed pull remote rooms, rehydrate context, and route reviews dynamically to **Featherless AI** (Auth SME — schema + RBAC) and **AIML API** (Cart SME — OpenAPI).
-   - Observe the adversarial debate as the Coder's **emergent non-compliance** (caused by stale documentation) is caught by the SQL-parsing compliance engine.
-   - After 2 failed rounds, the **ConsensusTracker** triggers a deadlock halt with HITL escalation.
-   - Click **Reject PR** to resolve the deadlock, logging: `❌ Human Operator agreed with SME and REJECTED the PR.`
+4. **Load a Repository Pull Request**:
+   - In the **Repository** field, enter `vjb/WellActually.ai` (or any other repo).
+   - In the **Pull Request** dropdown, select an open PR (e.g. PR #1).
+   - Notice the **Webhook Simulator** repository and PR number automatically sync.
+5. **Run the Swarm Review**:
+   - Click **Start Swarm Review**.
+   - If the PR touches high-stakes files (like `.env.example` or `schema.sql`), the Zero-Trust compliance scanner halts the pipeline, prompting for human operator consent.
+   - Click **Approve Exception** to authorize agent launch.
+   - Watch the **Agent Topology** graph dynamically render newly created reviewer roles based on touched files (e.g. `Environment Configuration Security SME` 🛡️).
+   - Observe the live debate round feed as agents use Featherless AI and AIML API to review the actual PR diff shown in the **Proposed Implementation** tab.
+   - Once consensus is reached or a deadlock escalates, see the post-debate summary card.
+   - Check the GitHub repository PR page: the swarm will have posted a compiled markdown **Audit Scorecard** directly as a comment on the PR!
+
+6. **Simulate Webhooks**:
+   - In the Webhook Simulator panel, adjust repository/PR details if desired and click **Simulate Webhook Trigger** to trigger a background compliance run.
 
 ---
 

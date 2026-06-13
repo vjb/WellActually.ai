@@ -1,4 +1,5 @@
 import os
+import asyncio
 import json
 import time
 import logging
@@ -259,7 +260,7 @@ class ReviewerAgent(Agent):
 
         # Schema check (Auth SME domain)
         if schema_path:
-            schema_check = verify_schema_compliance(coder_code, schema_path)
+            schema_check = await asyncio.to_thread(verify_schema_compliance, coder_code, schema_path)
             if not schema_check["compliant"]:
                 context_parts.append(f"MCP Database Schema Violations:\n{schema_check['violations']}")
             else:

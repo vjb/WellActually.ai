@@ -25,6 +25,9 @@ anyio>=4.0.0
 # CLI demo formatting
 rich>=13.0.0
 
+# JWT token handling
+PyJWT>=2.0.0
+
 # Testing
 pytest>=8.0.0
 pytest-anyio>=0.0.0

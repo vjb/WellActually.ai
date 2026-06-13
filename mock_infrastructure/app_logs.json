@@ -1,61 +1,9 @@
 [
   {
-    "timestamp": "2026-06-12T11:00:00.102Z",
-    "level": "INFO",
-    "service": "auth-service",
-    "trace_id": "tr_8f93aa0f-90db",
-    "message": "User login attempt successful",
-    "metadata": {
-      "user_id": "u_e0c17a58-8687",
-      "email": "customer@example.com",
-      "ip_address": "192.168.1.50"
-    }
-  },
-  {
-    "timestamp": "2026-06-12T11:01:05.215Z",
-    "level": "INFO",
-    "service": "cart-service",
-    "trace_id": "tr_3e1a44c9-b70d",
-    "message": "Item added to cart",
-    "metadata": {
-      "cart_id": "c_20b5f12a-4310",
-      "sku": "PROD-ENTERPRISE-01",
-      "quantity": 2
-    }
-  },
-  {
-    "timestamp": "2026-06-12T11:02:15.340Z",
-    "level": "INFO",
-    "service": "inventory-service",
-    "trace_id": "tr_5c34db8b-9e45",
-    "message": "Acquired stock lock for SKU PROD-ENTERPRISE-01",
-    "metadata": {
-      "lock_key": "inventory:lock:PROD-ENTERPRISE-01",
-      "holder": "client_uuid_f10a"
-    }
-  },
-  {
-    "timestamp": "2026-06-12T11:02:15.895Z",
+    "timestamp": "2026-06-12T11:03:00.000Z",
+    "service": "billing-service",
     "level": "WARNING",
-    "service": "inventory-service",
-    "trace_id": "tr_5c34db8b-9e45",
-    "message": "Memory leak signature detected: heap usage increased by 45MB in local checkout loop. Active references in SessionStore not cleared.",
-    "metadata": {
-      "leak_ratio": "0.15",
-      "active_refs": 4500,
-      "heap_used_bytes": 524288000
-    }
-  },
-  {
-    "timestamp": "2026-06-12T11:02:16.120Z",
-    "level": "ERROR",
-    "service": "cart-service",
-    "trace_id": "tr_a8b9f1d0-1e5c",
-    "message": "Deadlock encountered during cart checkout pipeline execution. Database lock contention on cart_items table.",
-    "metadata": {
-      "contending_transaction_1": "tx_2415a",
-      "contending_transaction_2": "tx_2415b",
-      "locked_resource": "table public.cart_items"
-    }
+    "message": "Elevated query rate on billing_profiles: 847 SELECT queries in 60s from spending-report-worker. Possible missing query cache or unbounded loop.",
+    "trace_id": "trace-billing-9f2e"
   }
 ]

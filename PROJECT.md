@@ -36,6 +36,9 @@
   - `scan_leaks(self) -> list[dict]`: Parses logs, returns list of detected memory leak logs or alerts.
 - `verify_schema_compliance(code_content: str, schema_path: str) -> dict`: Validates code against PostgreSQL schema.
 - `verify_openapi_compliance(code_content: str, openapi_path: str) -> dict`: Validates code against OpenAPI contract.
+- `verify_rbac_compliance(code_content: str) -> dict`: Validates code against RBAC access policies for sensitive tables. Returns dict with keys `compliant` (bool) and `violations` (list[str]).
+- `ConsensusTracker.record_vote(self, pr_id: str, reviewer_name: str, reviewer_role: str, vote: str, round_num: int, domain: str = "")`: Records an individual reviewer's vote (passed/failed) for a given PR round.
+- `ConsensusTracker.get_summary(self, pr_id: str) -> dict`: Returns a summary of all recorded votes and rounds for a PR, used for debate telemetry.
 
 ### Swarm Orchestration API (`src/swarm.py`)
 - `class Agent`: Base LLM-backed persona with `generate_response()`.

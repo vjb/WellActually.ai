@@ -97,14 +97,57 @@ function App() {
   const [currentCode, setCurrentCode] = useState(null);
   const [schemaCheck, setSchemaCheck] = useState(null);
   const [openapiCheck, setOpenapiCheck] = useState(null);
+  const [mcpTargetsFromServer, setMcpTargetsFromServer] = useState(null);
+  const [rbacCheck, setRbacCheck] = useState(null);
+  const [initialSchemaCheck, setInitialSchemaCheck] = useState(null);
+  const [initialOpenapiCheck, setInitialOpenapiCheck] = useState(null);
+  const [initialRbacCheck, setInitialRbacCheck] = useState(null);
+  const [resolutionType, setResolutionType] = useState(null);
   
   const [events, setEvents] = useState([]);
   const [watchdogLogs, setWatchdogLogs] = useState([]);
   const [activeTab, setActiveTab] = useState("debate"); // "debate" or "code"
   const [isStarting, setIsStarting] = useState(false);
   const [backendOnline, setBackendOnline] = useState(true);
+  const [debateSummary, setDebateSummary] = useState(null);
+  const [selectedScenario, setSelectedScenario] = useState("rbac_bypass");
+  const [scenarioFromServer, setScenarioFromServer] = useState("rbac_bypass");
+
+  const cleanSenderName = (sender, role) => {
+    if (!sender) return sender;
+    // For agent messages, prefer the role as the display name
+    if (role && role !== "SYSTEM") return role;
+    // Strip hash suffixes like '-7c6144ef' from agent names
+    let clean = sender.replace(/-[a-f0-9]{6,}$/i, '');
+    // Clean reviewer internal names: "reviewer-auth_and_fraud_sme" -> readable form
+    if (clean.startsWith('reviewer-')) {
+      clean = clean.replace('reviewer-', '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()).replace(' And ', ' & ');
+    }
+    return clean;
+  };
+
+  // Strip identity leaks from LLM responses (e.g. "[reviewer-cart_sme-ab8ff0d4 (Cart SME)]: ")
+  const cleanMessageText = (text) => {
+    if (!text) return text;
+    return text.replace(/^\[.*?\]:\s*/i, '');
+  };
+
+  // MCP targets: prefer server data, fallback to scenario-based defaults
+  const mcpTargets = mcpTargetsFromServer 
+    ? { table: mcpTargetsFromServer.schema_table, endpoint: mcpTargetsFromServer.api_endpoint }
+    : scenarioFromServer === "rbac_bypass" 
+      ? { table: "billing_profiles", endpoint: "/api/v1/billing/spending" }
+      : { table: "cart_items", endpoint: "/api/v1/checkout" };
+
+  // MCP display: show latest check results to tell the self-healing story
+  const displaySchemaCheck = schemaCheck || initialSchemaCheck;
+  const displayOpenapiCheck = openapiCheck || initialOpenapiCheck;
+  const displayRbacCheck = rbacCheck || initialRbacCheck;
+
   
   const chatContainerRef = useRef(null);
+  const leftColumnRef = useRef(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
 
   // Poll server state
   useEffect(() => {
@@ -123,6 +166,14 @@ function App() {
           setCurrentCode(data.current_code);
           setSchemaCheck(data.schema_check);
           setOpenapiCheck(data.openapi_check);
+          setRbacCheck(data.rbac_check);
+          setDebateSummary(data.debate_summary);
+          setScenarioFromServer(data.scenario);
+          setMcpTargetsFromServer(data.mcp_targets);
+          setInitialSchemaCheck(data.initial_schema_check);
+          setInitialOpenapiCheck(data.initial_openapi_check);
+          setInitialRbacCheck(data.initial_rbac_check);
+          setResolutionType(data.resolution_type);
         }
 
         const resEvents = await fetch(`${API_BASE}/api/events`);
@@ -161,14 +212,33 @@ function App() {
     }
   }, [events.length]);
 
+  // Show back-to-top button when page is scrolled down
+  useEffect(() => {
+    const handleScroll = () => setShowBackToTop(window.scrollY > 300);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Clear isStarting when status changes away from IDLE
+  useEffect(() => {
+    if (status !== 'IDLE') setIsStarting(false);
+  }, [status]);
+
   const handleStart = async () => {
     setIsStarting(true);
     try {
-      await fetch(`${API_BASE}/api/start`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/api/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scenario: selectedScenario })
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("Failed to start:", errText);
+      }
     } catch (err) {
       console.error("Error starting simulation:", err);
     }
-    setIsStarting(false);
   };
 
   const handleConsent = async (approve) => {
@@ -255,7 +325,7 @@ function App() {
               <span style={{ fontSize: "0.85rem", color: "#10b981" }}>Live Debate Active</span>
               {consensusRound > 0 && (
                 <span style={{ fontSize: "0.8rem", color: "#9ca3af", marginLeft: "0.25rem" }}>
-                  — Round {consensusRound} of 3
+                  — Round {consensusRound} of 2
                 </span>
               )}
             </div>
@@ -273,6 +343,21 @@ function App() {
             {status}
           </div>
           
+          <div
+            style={{
+              padding: "0.5rem 0.75rem",
+              borderRadius: "6px",
+              backgroundColor: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.15)",
+              color: "#e5e7eb",
+              fontSize: "0.85rem",
+              fontWeight: "500",
+              letterSpacing: "0.02em",
+            }}
+          >
+            Spending Report RBAC Bypass
+          </div>
+          
           <button
             onClick={handleStart}
             disabled={!canStart}
@@ -288,8 +373,7 @@ function App() {
               transition: "transform 0.1s, opacity 0.2s",
               opacity: canStart ? 1 : 0.5
             }}
-            onMouseDown={(e) => canStart && (e.target.style.transform = "scale(0.98)")}
-            onMouseUp={(e) => e.target.style.transform = "scale(1)"}
+
           >
             {isStarting ? "Dispatching..." : "Start Swarm Review"}
           </button>
@@ -315,9 +399,12 @@ function App() {
       </header>
 
       {/* Main Grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: "2rem", flex: 1 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: "2rem", flex: 1, minHeight: 0 }}>
         {/* Left Column: Triage, MCP and Watchdog Metrics */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
+        <div
+          ref={leftColumnRef}
+          style={{ display: "flex", flexDirection: "column", gap: "2rem", overflowY: "auto", minHeight: 0, position: "relative" }}
+        >
           
           {/* PR Information & Triage card */}
           <section className={`glass-panel ${status === "PENDING_HUMAN_APPROVAL" ? "glow-red" : ""}`}>
@@ -330,7 +417,7 @@ function App() {
               <span style={{ fontWeight: "bold" }}>{prId}</span>
               
               <span style={{ color: "#9ca3af" }}>Branch:</span>
-              <code>codeband/branch-pr-104</code>
+              <code>codeband/branch-{prId?.toLowerCase()}</code>
               
               <span style={{ color: "#9ca3af" }}>Modified:</span>
               <span style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
@@ -387,13 +474,13 @@ function App() {
             )}
 
             {/* Deadlock Human Consent Action Bar */}
-            {status === "HALTED" && (
+            {status === "HALTED" && !resolutionType && (
               <div style={{ marginTop: "1.5rem", padding: "1rem", borderRadius: "8px", border: "1px solid rgba(239, 68, 68, 0.4)", backgroundColor: "rgba(239, 68, 68, 0.05)" }}>
                 <div style={{ color: "#ef4444", fontWeight: "bold", fontSize: "0.95rem", marginBottom: "0.5rem" }}>
                   ⚠️ Consensus Deadlock Intervention
                 </div>
                 <p style={{ margin: "0 0 1rem 0", fontSize: "0.85rem", color: "#d1d5db" }}>
-                  Coder agent is stubborn and continues schema violations. Please intervene.
+                  Coder agent continues proposing changes that violate schema constraints despite reviewer feedback. Please intervene.
                 </p>
                 <div style={{ display: "flex", gap: "1rem" }}>
                   <button
@@ -423,18 +510,18 @@ function App() {
               {/* Postgres check */}
               <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
                 <div style={{ fontSize: "1.5rem" }}>
-                  {schemaCheck === null ? "⏳" : schemaCheck.compliant ? "✅" : "❌"}
+                  {displaySchemaCheck === null ? "⏳" : displaySchemaCheck.compliant ? "✅" : "❌"}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: schemaCheck && !schemaCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
+                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displaySchemaCheck && !displaySchemaCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
                     PostgreSQL Bounded Context Check
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
-                    Target: Postgres Table <code>cart_items</code>
+                    Target: Postgres Table <code>{mcpTargets.table}</code>
                   </div>
-                  {schemaCheck && !schemaCheck.compliant && (
+                  {displaySchemaCheck && !displaySchemaCheck.compliant && (
                     <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
-                      {schemaCheck.violations.join("\n")}
+                      {displaySchemaCheck.violations.join("\n")}
                     </div>
                   )}
                 </div>
@@ -443,18 +530,41 @@ function App() {
               {/* OpenAPI check */}
               <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
                 <div style={{ fontSize: "1.5rem" }}>
-                  {openapiCheck === null ? "⏳" : openapiCheck.compliant ? "✅" : "❌"}
+                  {displayOpenapiCheck === null ? "⏳" : displayOpenapiCheck.compliant ? "✅" : "❌"}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: openapiCheck && !openapiCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
+                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displayOpenapiCheck && !displayOpenapiCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
                     OpenAPI contract check
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
-                    Target: Checkout REST Endpoint <code>/api/v1/checkout</code>
+                    Target: REST Endpoint <code>{mcpTargets.endpoint}</code>
                   </div>
-                  {openapiCheck && !openapiCheck.compliant && (
+                  {displayOpenapiCheck && !displayOpenapiCheck.compliant && (
                     <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
-                      {openapiCheck.violations.join("\n")}
+                      {displayOpenapiCheck.violations.join("\n")}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* RBAC Policy check */}
+              <div style={{ display: "flex", gap: "1rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.15)", border: "1px solid rgba(255,255,255,0.03)" }}>
+                <div style={{ fontSize: "1.5rem" }}>
+                  {displayRbacCheck === null ? "⏳" : displayRbacCheck.compliant ? "✅" : "❌"}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: "bold", fontSize: "0.9rem", color: displayRbacCheck && !displayRbacCheck.compliant ? "#ef4444" : "#f3f4f6" }}>
+                    RBAC Access Policy Check
+                  </div>
+                  <div style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
+                    Target: {mcpTargetsFromServer?.rbac_target 
+                      ? <><span>Sensitive Financial Column </span><code>{mcpTargetsFromServer.rbac_target}</code></>
+                      : <><span>Access Policy Boundaries — </span><code>{mcpTargets.table}</code></>
+                    }
+                  </div>
+                  {displayRbacCheck && !displayRbacCheck.compliant && (
+                    <div style={{ fontSize: "0.75rem", color: "#ef4444", marginTop: "0.5rem", fontFamily: "monospace", backgroundColor: "rgba(239,68,68,0.1)", padding: "0.5rem", borderRadius: "4px" }}>
+                      {displayRbacCheck.violations.join("\n")}
                     </div>
                   )}
                 </div>
@@ -492,14 +602,89 @@ function App() {
             )}
           </section>
 
+          {/* Post-Debate Summary Card (Fix #5) */}
+          {debateSummary && (status === "HALTED" || status === "COMPLETED") && (
+            <section className="glass-panel" style={{ borderLeft: "4px solid #22c55e" }}>
+              <h2 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.5rem", color: "#22c55e" }}>
+                📊 Debate Summary
+              </h2>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
+                <div style={{ backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "8px", padding: "0.75rem", textAlign: "center" }}>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#f59e0b" }}>{debateSummary.total_rounds}</div>
+                  <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>Rounds</div>
+                </div>
+                <div style={{ backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "8px", padding: "0.75rem", textAlign: "center" }}>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: debateSummary.is_deadlocked ? "#ef4444" : "#22c55e" }}>
+                    {debateSummary.is_deadlocked ? "Deadlocked" : "Consensus"}
+                  </div>
+                  <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>Outcome</div>
+                </div>
+                <div style={{ backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "8px", padding: "0.75rem", textAlign: "center" }}>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#ef4444" }}>{debateSummary.rejections}</div>
+                  <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>Rejections</div>
+                </div>
+                <div style={{ backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "8px", padding: "0.75rem", textAlign: "center" }}>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#22c55e" }}>{debateSummary.approvals}</div>
+                  <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>Approvals</div>
+                </div>
+              </div>
+
+              {/* Per-Reviewer Breakdown */}
+              {debateSummary.rejections_by_reviewer && Object.entries(debateSummary.rejections_by_reviewer).map(([name, info]) => (
+                <div key={name} style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  padding: "0.5rem 0.75rem", marginBottom: "0.4rem",
+                  backgroundColor: "rgba(239, 68, 68, 0.05)", borderRadius: "6px",
+                  border: "1px solid rgba(239, 68, 68, 0.15)"
+                }}>
+                  <div>
+                    <span style={{ fontWeight: "bold", fontSize: "0.85rem", color: "#e5e7eb" }}>{info.role}</span>
+                    <span style={{
+                      fontSize: "0.65rem", marginLeft: "0.5rem",
+                      backgroundColor: info.domain === "auth" ? "rgba(168,85,247,0.15)" : "rgba(6,182,212,0.15)",
+                      color: info.domain === "auth" ? "#a855f7" : "#06b6d4",
+                      padding: "0.1rem 0.4rem", borderRadius: "4px"
+                    }}>
+                      {info.domain === "auth" ? "Domain: Auth & Schema" : info.domain === "cart" ? "Domain: API Contract" : `Domain: ${info.domain}`}
+                    </span>
+                  </div>
+                  <span style={{ color: "#ef4444", fontWeight: "bold", fontSize: "0.85rem" }}>
+                    {info.count}× rejected
+                  </span>
+                </div>
+              ))}
+
+              {/* Resolution */}
+              <div style={{
+                marginTop: "0.75rem", padding: "0.5rem 0.75rem", borderRadius: "6px",
+                backgroundColor: status === "COMPLETED" ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+                border: `1px solid ${status === "COMPLETED" ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`
+              }}>
+                <span style={{ fontSize: "0.8rem", color: status === "COMPLETED" ? "#22c55e" : "#ef4444" }}>
+                  Resolution: {resolutionType === "consensus" 
+                    ? "✓ Approved by Swarm Consensus" 
+                    : resolutionType === "human_override" 
+                      ? "✓ Approved (Human Override)" 
+                      : resolutionType === "halted" 
+                        ? "⚠️ Halted — PR Rejected"
+                        : status === "COMPLETED"
+                          ? (debateSummary?.is_deadlocked ? "✓ Approved (Human Override)" : "✓ Approved by Swarm Consensus")
+                          : "⚠️ Halted — Awaiting HITL"}
+                </span>
+              </div>
+            </section>
+          )}
+
         </div>
 
         {/* Right Column: Live feed panel */}
-        <section className="glass-panel" style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 10rem)", minHeight: "500px" }}>
+        <section className="glass-panel" style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0.75rem", marginBottom: "1rem" }}>
-            <div style={{ display: "flex", gap: "1rem" }}>
+            <div role="tablist" style={{ display: "flex", gap: "1rem" }}>
               <button
                 onClick={() => setActiveTab("debate")}
+                role="tab"
+                aria-selected={activeTab === "debate"}
                 style={{
                   background: "none",
                   border: "none",
@@ -515,6 +700,8 @@ function App() {
               </button>
               <button
                 onClick={() => setActiveTab("code")}
+                role="tab"
+                aria-selected={activeTab === "code"}
                 style={{
                   background: "none",
                   border: "none",
@@ -559,15 +746,30 @@ function App() {
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
                         <span style={{ fontWeight: "bold", color: getSenderColor(evt.sender), fontSize: "0.85rem" }}>
-                          {evt.sender} {evt.role !== "SYSTEM" && `(${evt.role})`}
+                          {cleanSenderName(evt.sender, evt.role)} {evt.role !== "SYSTEM" && evt.role !== cleanSenderName(evt.sender, evt.role) && `(${evt.role})`}
                         </span>
-                        <div style={{ display: "flex", gap: "0.4rem" }}>
+                        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
                           {evt.sender.includes("reviewer-auth") && (
-                            <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(168,85,247,0.15)", color: "#a855f7", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
-                              Featherless: Llama-3.1-70B
-                            </span>
+                            <>
+                              <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(168,85,247,0.15)", color: "#a855f7", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
+                                Featherless: Llama-3.1-70B
+                              </span>
+                              <span style={{ fontSize: "0.65rem", backgroundColor: "rgba(168,85,247,0.08)", color: "#c084fc", padding: "0.1rem 0.4rem", borderRadius: "4px", border: "1px solid rgba(168,85,247,0.2)" }}>
+                                Domain: Auth & Schema
+                              </span>
+                            </>
                           )}
-                          {(evt.sender.includes("coder") || evt.sender.includes("reviewer-cart") || evt.sender.includes("conductor")) && evt.role !== "SYSTEM" && (
+                          {evt.sender.includes("reviewer-cart") && (
+                            <>
+                              <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
+                                AIML: GPT-4o-mini
+                              </span>
+                              <span style={{ fontSize: "0.65rem", backgroundColor: "rgba(6,182,212,0.08)", color: "#67e8f9", padding: "0.1rem 0.4rem", borderRadius: "4px", border: "1px solid rgba(6,182,212,0.2)" }}>
+                                Domain: API Contract
+                              </span>
+                            </>
+                          )}
+                          {(evt.sender.includes("coder") || evt.sender.includes("conductor")) && evt.role !== "SYSTEM" && (
                             <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(6,182,212,0.15)", color: "#06b6d4", padding: "0.1rem 0.4rem", borderRadius: "4px" }}>
                               AIML: GPT-4o-mini
                             </span>
@@ -575,16 +777,46 @@ function App() {
                         </div>
                       </div>
                       
-                      {evt.message.includes("def ") ? (
-                        <HighlightedCode code={evt.message} />
-                      ) : (
-                        <p style={{ margin: 0, fontSize: "0.85rem", color: "#e5e7eb", whiteSpace: "pre-wrap" }}>
-                          {evt.message}
-                        </p>
-                      )}
+                      {(() => {
+                        const msg = cleanMessageText(evt.message);
+                        return (msg.includes("```") || (msg.includes("def ") && msg.includes(":"))) ? (
+                          <HighlightedCode code={msg} />
+                        ) : (
+                          <p style={{ margin: 0, fontSize: "0.85rem", color: "#e5e7eb", whiteSpace: "pre-wrap" }}>
+                            {msg}
+                          </p>
+                        );
+                      })()}
                     </div>
                   );
                 })
+              )}
+              {status === "RUNNING" && (
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.6rem",
+                  padding: "0.75rem 1rem",
+                  marginTop: "0.5rem",
+                  borderRadius: "8px",
+                  backgroundColor: "rgba(34, 197, 94, 0.05)",
+                  border: "1px solid rgba(34, 197, 94, 0.15)"
+                }}>
+                  <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                    {[0, 1, 2].map(i => (
+                      <span key={i} style={{
+                        width: "6px",
+                        height: "6px",
+                        borderRadius: "50%",
+                        backgroundColor: "#22c55e",
+                        animation: `thinkingDot 1.4s ease-in-out ${i * 0.2}s infinite`
+                      }} />
+                    ))}
+                  </div>
+                  <span style={{ fontSize: "0.8rem", color: "#22c55e", fontStyle: "italic" }}>
+                    Auth & Fraud SME + Cart SME reasoning via Band.ai room...
+                  </span>
+                </div>
               )}
 
             </div>
@@ -601,6 +833,38 @@ function App() {
           )}
         </section>
       </div>
+
+      {/* Back to top button — fixed to viewport */}
+      {showBackToTop && (
+        <button
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Back to top"
+          style={{
+            position: "fixed",
+            bottom: "2rem",
+            left: "2rem",
+            width: "42px",
+            height: "42px",
+            borderRadius: "50%",
+            border: "1px solid rgba(6, 182, 212, 0.5)",
+            background: "rgba(6, 182, 212, 0.15)",
+            backdropFilter: "blur(12px)",
+            color: "#06b6d4",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "1.2rem",
+            transition: "all 0.2s",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+            zIndex: 1000
+          }}
+          onMouseEnter={(e) => { e.target.style.background = "rgba(6, 182, 212, 0.3)"; e.target.style.transform = "scale(1.1)"; }}
+          onMouseLeave={(e) => { e.target.style.background = "rgba(6, 182, 212, 0.15)"; e.target.style.transform = "scale(1)"; }}
+        >
+          ↑
+        </button>
+      )}
     </div>
   );
 }

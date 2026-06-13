@@ -30,8 +30,8 @@ def main():
         
     codeowners_path = "mock_infrastructure/CODEOWNERS"
     if not os.path.exists(codeowners_path):
-        print(f"[WARNING] CODEOWNERS file not found at {codeowners_path}. Skipping checks.")
-        sys.exit(0)
+        print(f"[ERROR] CODEOWNERS file not found at {codeowners_path}. Cannot proceed without compliance rules.")
+        sys.exit(1)
         
     with open(codeowners_path, "r", encoding="utf-8") as f:
         codeowners_content = f.read()

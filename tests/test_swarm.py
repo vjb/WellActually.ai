@@ -90,7 +90,7 @@ def test_goal_2_3_adversarial_loop_and_deadlock_termination():
     - Goal 3: ConsensusTracker counts disagreement iterations, breaking the loop on the 3rd iteration
       and Escalating to human operator.
     """
-    tracker = ConsensusTracker(max_rounds=2)
+    tracker = ConsensusTracker(max_rounds=3)
     pr_id = "pr_checkout_adversarial"
     
     claude_coder_invalid_code = """
@@ -135,15 +135,13 @@ def test_goal_4_observability_telemetry_leak_detection(tmp_path):
     Verifies that the Telemetry Watchdog/Observability daemon stream parser successfully detects
     anomalies (memory leaks and database pool exhaustion) and injects logs / alert payloads.
     """
-    actual_log_path = "mock_infrastructure/app_logs.json"
-    scanner = TelemetryScanner(log_path=actual_log_path)
-    
-    detected_anomalies = scanner.scan_leaks()
-    
-    assert len(detected_anomalies) > 0
-    assert any("Memory leak signature detected" in alert["message"] for alert in detected_anomalies)
-
     custom_logs = [
+        {
+            "timestamp": "2026-06-12T11:02:15.895Z",
+            "level": "WARNING",
+            "service": "inventory-service",
+            "message": "Memory leak signature detected: heap usage increased by 45MB in local checkout loop. Active references in SessionStore not cleared."
+        },
         {
             "timestamp": "2026-06-12T11:03:00.000Z",
             "level": "ERROR",
@@ -155,11 +153,12 @@ def test_goal_4_observability_telemetry_leak_detection(tmp_path):
     with open(custom_log_file, "w") as f:
         json.dump(custom_logs, f)
         
-    scanner_custom = TelemetryScanner(log_path=str(custom_log_file))
-    custom_anomalies = scanner_custom.scan_leaks()
+    scanner = TelemetryScanner(log_path=str(custom_log_file))
+    detected_anomalies = scanner.scan_leaks()
     
-    assert len(custom_anomalies) == 1
-    assert "Database pool exhaustion" in custom_anomalies[0]["message"]
+    assert len(detected_anomalies) == 2
+    assert any("Memory leak signature detected" in alert["message"] for alert in detected_anomalies)
+    assert any("Database pool exhaustion" in alert["message"] for alert in detected_anomalies)
 
 
 # ============================================================================
@@ -302,20 +301,368 @@ async def test_swarm_library_orchestration(mock_rest_client, mock_openai_client)
     assert r1["is_deadlocked"] is False
     assert session.status == "PENDING_HUMAN_APPROVAL"
     
-    # Round 2
+    # Round 2 — should now deadlock at max_rounds=2
     r2 = await session.run_debate_round(conductor, coder, [reviewer])
     assert r2["round_passed"] is False
-    assert r2["is_deadlocked"] is False
-    assert session.status == "PENDING_HUMAN_APPROVAL"
-    
-    # Round 3
-    r3 = await session.run_debate_round(conductor, coder, [reviewer])
-    assert r3["round_passed"] is False
-    assert r3["is_deadlocked"] is True
-    assert r3["action"] == "hitl_escalation"
+    assert r2["is_deadlocked"] is True
+    assert r2["action"] == "hitl_escalation"
     assert session.status == "HALTED"
     
     # Cleanup agents
     await session.cleanup_agents(conductor, coder, [reviewer])
 
 
+# ============================================================================
+# Fix #2: SQL Parsing Compliance Tests
+# ============================================================================
+from src.governance import (
+    _parse_schema_columns,
+    _extract_insert_columns,
+    verify_schema_compliance,
+    verify_rbac_compliance,
+    ConsensusTracker,
+)
+
+
+def test_parse_schema_columns():
+    """Verify that _parse_schema_columns correctly extracts column names from CREATE TABLE statements."""
+    schema = """
+    CREATE TABLE cart_items (
+        id UUID PRIMARY KEY,
+        cart_id UUID NOT NULL,
+        product_id UUID NOT NULL,
+        quantity INTEGER NOT NULL,
+        price_at_addition DECIMAL(12, 2) NOT NULL,
+        UNIQUE(cart_id, product_id)
+    );
+    """
+    result = _parse_schema_columns(schema)
+    assert "cart_items" in result
+    assert "id" in result["cart_items"]
+    assert "cart_id" in result["cart_items"]
+    assert "product_id" in result["cart_items"]
+    assert "quantity" in result["cart_items"]
+    assert "price_at_addition" in result["cart_items"]
+    assert "discount_applied" not in result["cart_items"]
+
+
+def test_parse_schema_multiple_tables():
+    """Verify parsing works for multiple CREATE TABLE statements."""
+    schema = """
+    CREATE TABLE users (
+        id UUID PRIMARY KEY,
+        email VARCHAR(255),
+        role VARCHAR(50)
+    );
+    CREATE TABLE carts (
+        id UUID PRIMARY KEY,
+        user_id UUID,
+        status VARCHAR(50)
+    );
+    """
+    result = _parse_schema_columns(schema)
+    assert "users" in result
+    assert "carts" in result
+    assert "email" in result["users"]
+    assert "user_id" in result["carts"]
+
+
+def test_extract_insert_columns():
+    """Verify that INSERT INTO column extraction works."""
+    code = "db.execute('INSERT INTO cart_items (cart_id, product_id, discount_applied) VALUES (%s, %s, %s)')"
+    result = _extract_insert_columns(code)
+    assert len(result) == 1
+    assert result[0][0] == "cart_items"
+    assert "discount_applied" in result[0][1]
+    assert "cart_id" in result[0][1]
+
+
+def test_extract_insert_multiple_statements():
+    """Verify extraction handles multiple INSERT statements in the same code."""
+    code = """
+    db.execute("INSERT INTO cart_items (cart_id, product_id) VALUES (%s, %s)")
+    db.execute("INSERT INTO users (email, role) VALUES (%s, %s)")
+    """
+    result = _extract_insert_columns(code)
+    assert len(result) == 2
+
+
+def test_schema_compliance_catches_nonexistent_column():
+    """The core scenario: code uses discount_applied but schema doesn't have it."""
+    code = "db.execute('INSERT INTO cart_items (cart_id, product_id, discount_applied) VALUES (%s, %s, %s)')"
+    result = verify_schema_compliance(code, "mock_infrastructure/postgres_schema.sql")
+    assert result["compliant"] is False
+    assert any("discount_applied" in v for v in result["violations"])
+
+
+def test_schema_compliance_passes_valid_columns():
+    """Code using only valid columns should pass."""
+    code = "db.execute('INSERT INTO cart_items (cart_id, product_id, quantity, price_at_addition) VALUES (%s, %s, %s, %s)')"
+    result = verify_schema_compliance(code, "mock_infrastructure/postgres_schema.sql")
+    assert result["compliant"] is True
+    assert len(result["violations"]) == 0
+
+
+def test_schema_compliance_no_insert():
+    """Code without INSERT or named-column SELECT should pass."""
+    code = "result = db.query('SELECT * FROM cart_items')"
+    result = verify_schema_compliance(code, "mock_infrastructure/postgres_schema.sql")
+    assert result["compliant"] is True
+
+
+def test_schema_compliance_catches_select_nonexistent_column():
+    """SELECT with a column that doesn't exist should be caught."""
+    code = "cursor.execute('SELECT spending_limit_usd, discount_tier FROM billing_profiles WHERE user_id = %s', (uid,))"
+    result = verify_schema_compliance(code, "mock_infrastructure/postgres_schema.sql")
+    assert result["compliant"] is False
+    assert any("discount_tier" in v for v in result["violations"])
+
+
+def test_schema_compliance_passes_valid_select():
+    """SELECT with only valid columns should pass."""
+    code = "cursor.execute('SELECT spending_limit_usd FROM billing_profiles WHERE user_id = %s', (uid,))"
+    result = verify_schema_compliance(code, "mock_infrastructure/postgres_schema.sql")
+    assert result["compliant"] is True
+
+
+# ============================================================================
+# Fix #3: RBAC Compliance Tests
+# ============================================================================
+def test_rbac_catches_direct_billing_access():
+    """Detect direct access to billing_profiles.spending_limit_usd without role checks."""
+    code = """
+def get_spending(user_id):
+    return db.query("SELECT spending_limit_usd FROM billing_profiles WHERE user_id = %s", user_id)
+    """
+    result = verify_rbac_compliance(code)
+    assert result["compliant"] is False
+    assert any("RBAC" in v for v in result["violations"])
+
+
+def test_rbac_catches_weak_role_guard():
+    """Weak if/else role guard should still fail — requires proper middleware."""
+    code = """
+def get_spending(user_id):
+    user = db.query("SELECT role FROM users WHERE id = %s", user_id)
+    if user.role == 'admin':
+        return db.query("SELECT spending_limit_usd FROM billing_profiles WHERE user_id = %s", user_id)
+    """
+    result = verify_rbac_compliance(code)
+    assert result["compliant"] is False
+    assert any("client-side" in v for v in result["violations"])
+
+
+def test_rbac_passes_with_strong_middleware():
+    """Code with proper RBAC middleware decorator should pass."""
+    code = """
+@requires_role('finance_admin')
+def get_spending(user_id):
+    return db.query("SELECT spending_limit_usd FROM billing_profiles WHERE user_id = %s", user_id)
+    """
+    result = verify_rbac_compliance(code)
+    assert result["compliant"] is True
+
+
+def test_rbac_passes_nonsensitive_code():
+    """Code not accessing sensitive columns should pass."""
+    code = """
+def get_cart(user_id):
+    return db.query("SELECT * FROM carts WHERE user_id = %s", user_id)
+    """
+    result = verify_rbac_compliance(code)
+    assert result["compliant"] is True
+
+
+# ============================================================================
+# Fix #4: Split Reviewer Context Tests
+# ============================================================================
+def test_reviewer_auth_domain():
+    """Auth SME should have domain='auth'."""
+    reviewer = ReviewerAgent(role="Auth and Fraud SME", domain="auth")
+    assert reviewer.domain == "auth"
+    assert "schema" in reviewer.system_prompt.lower()
+
+
+def test_reviewer_cart_domain():
+    """Cart SME should have domain='cart'."""
+    reviewer = ReviewerAgent(role="Cart SME", domain="cart")
+    assert reviewer.domain == "cart"
+    assert "API" in reviewer.system_prompt or "OpenAPI" in reviewer.system_prompt
+
+
+# ============================================================================
+# Fix #6: ConsensusTracker Vote Tracking Tests
+# ============================================================================
+def test_consensus_tracker_vote_recording():
+    """Verify votes are recorded per reviewer."""
+    tracker = ConsensusTracker(max_rounds=2)
+    tracker.record_vote("PR-104", "reviewer-auth", "Auth SME", "failed", 1, domain="auth")
+    tracker.record_vote("PR-104", "reviewer-cart", "Cart SME", "passed", 1, domain="cart")
+
+    summary = tracker.get_summary("PR-104")
+    assert summary["total_votes"] == 2
+    assert summary["rejections"] == 1
+    assert summary["approvals"] == 1
+    assert "reviewer-auth" in summary["rejections_by_reviewer"]
+
+
+def test_consensus_tracker_summary_deadlock():
+    """Verify summary correctly reports deadlock."""
+    tracker = ConsensusTracker(max_rounds=1)
+    tracker.record_round("PR-104", "failed")
+    tracker.record_round("PR-104", "failed")
+
+    summary = tracker.get_summary("PR-104")
+    assert summary["is_deadlocked"] is True
+    assert summary["total_rounds"] == 2
+
+
+def test_consensus_tracker_summary_no_votes():
+    """Summary for a PR with no votes should return empty data."""
+    tracker = ConsensusTracker(max_rounds=2)
+    summary = tracker.get_summary("PR-999")
+    assert summary["total_votes"] == 0
+    assert summary["rejections"] == 0
+    assert summary["total_rounds"] == 0
+
+
+# ============================================================================
+# Fix #1: Scenario Prompt Tests
+# ============================================================================
+def test_coder_scenario_uses_stale_docs():
+    """Coder should receive stale docs mentioning discount_tier (doesn't exist in live schema)."""
+    coder = CoderAgent(scenario="rbac_bypass")
+    assert "discount_tier" in coder.system_prompt
+    assert "billing_profiles" in coder.system_prompt
+    assert "staging" in coder.system_prompt
+    # Should instruct to fix schema violations, not defend them
+    assert "remove" in coder.system_prompt.lower() or "fix" in coder.system_prompt.lower()
+
+
+def test_coder_scenario_b_rbac_bypass():
+    """Scenario B coder should receive docs saying direct access is OK."""
+    coder = CoderAgent(scenario="rbac_bypass")
+    assert "billing_profiles" in coder.system_prompt
+    assert "spending_limit_usd" in coder.system_prompt
+
+
+# ============================================================================
+# Fix #2: FastAPI API Endpoint Tests
+# ============================================================================
+from fastapi.testclient import TestClient
+from src.server import app, state
+
+
+def test_api_status_returns_idle():
+    """GET /api/status should return IDLE state on fresh start."""
+    client = TestClient(app)
+    state.reset()
+    res = client.get("/api/status")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "IDLE"
+    assert data["scenario"] == "rbac_bypass"
+    assert data["pr_id"] == "PR-217"
+    assert "schema_check" in data
+    assert "rbac_check" in data
+    assert "debate_summary" in data
+    # New fields
+    assert data["resolution_type"] is None
+    assert data["initial_schema_check"] is None
+    assert data["mcp_targets"]["schema_table"] == "billing_profiles"
+    assert data["mcp_targets"]["api_endpoint"] == "/api/v1/billing/spending"
+
+
+def test_api_status_rbac_scenario_targets():
+    """GET /api/status with rbac_bypass scenario should return correct MCP targets."""
+    client = TestClient(app)
+    state.reset(scenario="rbac_bypass")
+    res = client.get("/api/status")
+    data = res.json()
+    assert data["pr_id"] == "PR-217"
+    assert data["mcp_targets"]["schema_table"] == "billing_profiles"
+    assert data["mcp_targets"]["rbac_target"] == "billing_profiles.spending_limit_usd"
+
+
+def test_api_events_returns_list():
+    """GET /api/events should return a list."""
+    client = TestClient(app)
+    state.reset()
+    res = client.get("/api/events")
+    assert res.status_code == 200
+    assert isinstance(res.json(), list)
+
+
+def test_api_start_accepts_scenario():
+    """POST /api/start should accept and apply scenario parameter."""
+    client = TestClient(app)
+    state.reset()
+    # Mock the background simulation task to avoid blocking on human_consent loop
+    with patch("src.server.run_simulation_task", new_callable=AsyncMock):
+        res = client.post("/api/start", json={"scenario": "rbac_bypass"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["scenario"] == "rbac_bypass"
+    state.reset()  # Cleanup
+
+
+def test_api_start_rejects_unknown_scenario():
+    """POST /api/start with unknown scenario should return 400."""
+    client = TestClient(app)
+    state.reset()
+    res = client.post("/api/start", json={"scenario": "nonexistent"})
+    assert res.status_code == 400
+    assert "Unknown scenario" in res.json()["detail"]
+
+
+def test_api_start_rejects_while_running():
+    """POST /api/start should return 400 if simulation is already running."""
+    client = TestClient(app)
+    state.status = "RUNNING"
+    res = client.post("/api/start", json={"scenario": "rbac_bypass"})
+    assert res.status_code == 400
+    state.reset()  # Cleanup
+
+
+def test_api_reset_clears_state():
+    """POST /api/reset should reset state to IDLE."""
+    client = TestClient(app)
+    state.status = "COMPLETED"
+    state.pr_id = "PR-999"
+    res = client.post("/api/reset")
+    assert res.status_code == 200
+    assert res.json()["status"] == "reset"
+    # Verify state was actually reset
+    status_res = client.get("/api/status")
+    assert status_res.json()["status"] == "IDLE"
+
+
+def test_api_reset_rejects_while_running():
+    """POST /api/reset should return 400 if simulation is running."""
+    client = TestClient(app)
+    state.status = "RUNNING"
+    res = client.post("/api/reset")
+    assert res.status_code == 400
+    state.reset()  # Cleanup
+
+
+def test_api_telemetry_returns_anomalies():
+    """GET /api/telemetry should return watchdog scan results."""
+    client = TestClient(app)
+    res = client.get("/api/telemetry")
+    assert res.status_code == 200
+    data = res.json()
+    assert isinstance(data, list)
+    assert len(data) >= 1
+    assert data[0]["service"] == "billing-service"
+
+
+def test_api_mcp_returns_compliance():
+    """GET /api/mcp should return schema and openapi check results."""
+    client = TestClient(app)
+    res = client.get("/api/mcp")
+    assert res.status_code == 200
+    data = res.json()
+    assert "postgres" in data
+    assert "openapi" in data
+    assert "compliant" in data["postgres"]

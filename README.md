@@ -1,8 +1,10 @@
 # WellActually.ai 🧠⚡
 ### Just-in-Time Swarm Intelligence for Code Governance
-*Ephemeral, dynamically synthesized AI review agents — powered by **Band.ai**, **Featherless AI** & **AIML API**.*
+*Ephemeral, dynamically synthesized AI review agents — orchestrated through **Band.ai's full SDK surface**.*
 
-> **🏆 Track 2: Multi-Agent Software Development** — JIT agent synthesis, cross-model adversarial debate, and human-in-the-loop governance.
+> Pull Requests don't need static linters. They need an **on-demand governance swarm** — synthesized in real time from the diff itself, debating adversarially, and dissolving when done. That's WellActually.ai.
+
+> **🏆 Track 2: Multi-Agent Software Development** — JIT agent synthesis, cross-model adversarial debate, and autonomous governance.
 
 ---
 
@@ -12,177 +14,113 @@
 
 ---
 
-## 🚀 The Big Idea
-
-Every code review tool today uses **static agents** — the same reviewers, the same checks, every time. WellActually.ai inverts this entirely:
-
-> **Governance is not a static rulebook. It's ephemeral, dynamically generated compute.**
-
-When a Pull Request arrives, WellActually.ai reads the diff, understands what domains are affected, and **synthesizes custom AI reviewer agents on the fly** — each with a unique persona, domain expertise, and adversarial mandate. These agents exist only for the duration of the review, then dissolve.
-
-This is **Just-in-Time Swarm Intelligence**: zero pre-configuration, infinite adaptability.
-
----
-
-## ✨ How It Works — The 5-Phase Pipeline
+## 🧠 How It Works
 
 ```mermaid
 flowchart TD
-    %% Styling
     classDef default fill:#111827,stroke:#374151,color:#f3f4f6,stroke-width:1px;
     classDef accent fill:#312e81,stroke:#4f46e5,color:#e0e7ff,stroke-width:2px;
-    classDef warning fill:#78350f,stroke:#d97706,color:#fef3c7,stroke-width:1px;
     classDef success fill:#064e3b,stroke:#059669,color:#ecfdf5,stroke-width:1px;
     
-    A[🎯 PR Opened]:::default --> B{🛡️ Zero-Trust Triage}:::default
-    B -->|JIT Swarm Synthesis| D[🧠 JIT Swarm Synthesis]:::accent
-    D -->|Synthesize Custom Persona system_prompt| E[🔗 Band.ai Chat Room Deployment]:::default
-    E --> F[⚔️ Adversarial Consensus Debate]:::default
-    F -->|Round 1-2 Review Passed| G[✓ Swarm Consensus Approved]:::success
-    F -->|Consensus Deadlock Halted| H[⚠️ Escalate to Human Operator]:::warning
-    G --> I[📊 Post Scorecard Comment to GitHub]:::default
-    H -->|Human Override Approve/Reject| I
+    A["🎯 PR Opened"] --> B["🛡️ Zero-Trust Triage"]
+    B -->|JIT Synthesis| D["🧠 Synthesize Custom Agents"]:::accent
+    D -->|Register on Band| E["🔗 Band.ai Room Deployment"]
+    E --> F["⚔️ Multi-Round Adversarial Debate"]
+    F -->|Consensus Reached| G["✓ Approved"]:::success
+    F -->|Violations Found| H["🔄 Coder Revises + Re-Review"]
+    H --> F
+    G --> I["📊 GitHub Scorecard + Audit Report"]
 ```
 
-### Phase 1: 🎯 PR Ingest
-- Select any public GitHub repository and open pull request
-- System fetches the PR metadata, diff, and file contents in real time
-- Zero configuration — point it at any repo
+**Phase 1 — Ingest**: Point at any public GitHub repo + PR. System fetches metadata, diff, and file contents.
 
-### Phase 2: 🧠 JIT Agent Synthesis
-The conductor analyzes the PR diff and **dynamically generates** reviewer agents:
-- A GDPR data export PR → spawns a `Data Privacy Compliance SME` + `Database Security Auditor`
-- A billing API PR → spawns an `Auth & Fraud SME` + `Financial Data Compliance SME`
-- An admin dashboard PR → spawns an `Infrastructure Security SME` + `Performance Auditor`
+**Phase 2 — JIT Synthesis** *(The Centerpiece)*: An LLM analyzes the diff to understand *what domains* are affected, then dynamically generates custom reviewer agents — each with a unique persona, domain expertise, and adversarial mandate. A billing PR spawns `Auth & Fraud SME` + `Financial Data Compliance SME`. A chemistry PR spawns `ChemDraw Functionality SME` + `Stereo Parsing Auditor`. No two reviews are the same.
 
-Each agent gets:
-- A **unique system prompt** tailored to its domain and the specific code changes
-- A **specific model assignment** (Llama-3.1-70B via Featherless AI for maximum review diversity)
-- A **mandate** — what to look for, what to reject, what to approve
+**Phase 3 — Band.ai Deployment**: Agents register on Band.ai, verify identities via `test.authentication`, discover peers, join a task room, and begin coordinating through structured events and context rehydration.
 
-### Phase 3: 🔗 Band.ai Swarm Deployment
-- Agents are registered on the **Band.ai** platform with real credentials
-- A **Task Room** is created and all agents join as participants
-- The conductor orchestrates the review using Band.ai's messaging and context APIs
+**Phase 4 — Adversarial Debate**: Coder proposes. Reviewers challenge. Messages flow through Band's full lifecycle with `mark_processing → mark_processed/mark_failed` state tracking. Memories persist across rounds. The swarm iterates until consensus is reached or the round limit triggers escalation.
 
-### Phase 4: ⚔️ Adversarial Debate
-- The **Lead Coder** proposes code changes based on the PR diff
-- Each **JIT Reviewer** evaluates from their domain perspective
-- Agents debate across rounds until **consensus** or **deadlock**
-- If deadlocked: the system halts and escalates to a human operator
-
-### Phase 5: 📊 Verdict Scorecard
-Rich analytics showing:
-- Number of debate rounds, JIT agents synthesized, files analyzed
-- Approval/rejection breakdown per reviewer
-- Domains covered and outcome (consensus vs deadlock)
+**Phase 5 — Verdict**: Rich scorecard posted as a GitHub PR comment + rendered audit report in the dashboard.
 
 ---
 
-## 🛡️ Zero-Trust Security Scanner
+## 🔗 Band.ai SDK — Deep Integration (39 Methods)
 
-Before the swarm launches, a **Zero-Trust triage scanner** automatically audits the PR:
-- Identifies high-stakes code paths (e.g., auth, billing, database schemas) and maps required validation contexts to the JIT agents.
-- Operates fully autonomously, deploying the swarm without blocking pipeline velocity.
-- Escalates to a human operator *only* if the adversarial debate loop reaches a consensus deadlock.
+WellActually.ai uses **39 unique Band SDK methods** across 17 API categories:
+
+| SDK Feature | Methods Used | Purpose |
+|---|---|---|
+| **System Health** | `get_version()`, `health_check()` | Platform connectivity + service health verification |
+| **Auth Verification** | `test.authentication()` | Validate agent credentials post-registration |
+| **Human Profile** | `get_my_profile()`, `update_my_profile()` | Verify and synchronize human operator details |
+| **Human Peers** | `list_my_peers()` | Discover human operator's connected network |
+| **Human Contacts** | `list_my_contacts()` | List human operator contacts |
+| **Human Chats** | `list_my_chats()` | List active chat rooms managed by human operator |
+| **Human Memories** | `list_user_memories()`, `archive_user_memory()` | Expose listing and archiving of user memories |
+| **Human Participants** | `list_my_chat_participants()` | List participants in chat rooms |
+| **Human Messages** | `list_my_chat_messages()` | List messages in chat rooms |
+| **Agent Registration** | `register_my_agent()`, `list_my_agents()`, `delete_my_agent()` | JIT agent lifecycle — register, enumerate, clean up |
+| **Agent Identity** | `get_agent_me()` | Each agent verifies its own identity after registration |
+| **Peer Discovery** | `list_agent_peers()` | Discover available agent peers |
+| **Agent Contacts** | `add_agent_contact()`, `respond_to_agent_contact_request()`, `list_agent_contacts()` | Peer contact exchange and trust handshake |
+| **Chat Rooms** | `create_agent_chat()`, `list_agent_chats()`, `get_agent_chat()` | Room creation, enumeration, metadata verification |
+| **Participants** | `add_agent_chat_participant()`, `list_agent_chat_participants()`, `remove_agent_chat_participant()` | Add agents to room, verify roster, clean up on completion |
+| **Messages** | `create_agent_chat_message()`, `list_agent_messages()`, `get_agent_next_message()` | Structured communication, audit trail, queue polling |
+| **Message Lifecycle** | `mark_agent_message_processing()`, `mark_agent_message_processed()`, `mark_agent_message_failed()` | Full message state tracking with crash recovery |
+| **Context Rehydration** | `get_agent_chat_context()` | Agents rehydrate full conversation history from Band before each round |
+| **Structured Events** | `create_agent_chat_event()` — `task`, `thought`, `tool_call`, `tool_result`, `error` | Event types used for JIT Swarm governance workflow tracking |
+| **Memory — Create** | `create_agent_memory()` | Create violation and success memories |
+| **Memory — Read** | `get_agent_memory()`, `list_agent_memories()` | Query previous review context |
+| **Memory — Lifecycle** | `supersede_agent_memory()`, `archive_agent_memory()` | Supersede outdated findings, archive on completion |
+
+---
+
+## 🔄 Automated Consensus Flow
+
+```mermaid
+graph TD
+    A[PR Opened / Modified] --> B[Zero-Trust Compliance Triage]
+    B -->|High-Stakes Violation| C[Halt Auto-Merge & Escalate to Human]
+    B -->|Standard/Clean Path| D[JIT Swarm Synthesis]
+    D --> E[Adversarial Debate Loop]
+    E -->|Consensus Reached| F[Scorecard Posted & Auto-Merge]
+    E -->|Deadlock / Limit Exceeded| G[Halt Swarm & Tag Human Mediator]
+    C --> H[Human Approval / Override]
+    G --> H
+    H -->|Approve / Compromise| F
+    H -->|Reject| I[PR Closed / Blocked]
+```
 
 ---
 
 ## 🤝 Platform & Partner Stack
 
-### 1. **Band.ai** — Core Agent Collaboration
-The entire swarm runs on Band.ai's REST SDK:
-- **Agent Registration**: Each JIT-synthesized agent is registered with unique credentials
-- **Task Rooms**: Dynamic rooms created per review session
-- **Real-time Messaging**: Agents exchange code proposals and critiques via `@mentions`
-- **Context Rehydration**: Reviewers query chat history before evaluating
-- **Agent Reuse**: Automatically detects platform limits and reuses pre-registered credentials
-
-### 2. **Featherless AI** — Sponsor Partner
-JIT Reviewer agents run on `unsloth/Meta-Llama-3.1-70B-Instruct` via Featherless AI's serverless endpoint. Using a different model architecture from the coder ensures genuine **adversarial diversity** — the reviewers don't share the coder's blind spots.
-
-### 3. **AIML API** — Sponsor Partner
-The Conductor and Lead Coder run on `gpt-4o-mini` via AIML API. By routing through the AIML gateway with standard OpenAI client compatibility, we achieve seamless multi-provider orchestration.
-
-### 4. **GitHub** — VCS Integration
-- **Live PR Loading**: Fetch any public PR's metadata, diff, and file contents
-- **Scorecard Commenting**: Post audit results directly back to the PR as a comment
-- **Dynamic PR Creation**: Demo PRs created programmatically for diverse review scenarios
+| Platform | Role | How It's Used |
+|----------|------|---------------|
+| **Band.ai** | Agent Collaboration | Full SDK — 39 methods across identity, peers, rooms, messages, events, memory, participants |
+| **AIML API** | Multi-Model Routing | `o3-mini` (high-stakes reasoning), `gpt-4o` (general), `gpt-4o-mini` (fast tasks) |
+| **GitHub** | VCS Integration | Live PR loading, diff analysis, scorecard commenting |
 
 ---
 
-## 📂 Project Structure
+## 🛠️ Quick Start
 
-### ⚙️ Core Swarm & Backend
-| File | Description |
-|------|-------------|
-| [`src/swarm.py`](src/swarm.py) | Async swarm orchestration — maps Python Agent classes to Band.ai REST SDK. Offloads LLM calls to threadpool via `asyncio.to_thread`. |
-| [`src/server.py`](src/server.py) | FastAPI server — REST endpoints for swarm state, events, HITL consent, and PR management. JIT agent synthesis and adversarial debate loop. |
-| [`src/governance.py`](src/governance.py) | Deterministic compliance engine — CODEOWNERS triage, ConsensusTracker, schema/RBAC/OpenAPI verification, TelemetryScanner. |
-
-### 💻 Frontend Dashboard
-| File | Description |
-|------|-------------|
-| [`frontend/src/App.jsx`](frontend/src/App.jsx) | React Swarm Control Center — cinematic 5-phase pipeline UI with live agent topology, adversarial debate feed, HITL controls, and verdict scorecard. |
-| [`frontend/src/index.css`](frontend/src/index.css) | Dark-themed glassmorphism design system with micro-animations, glow effects, and responsive layout. |
-
-### 🧪 Tests
-| File | Description |
-|------|-------------|
-| [`tests/test_swarm.py`](tests/test_swarm.py) | Comprehensive test suite covering governance checks, consensus tracking, JIT synthesis, schema compliance, RBAC validation, and full swarm integration. |
-
----
-
-## 🛠️ Installation & Setup
-
-### Prerequisites
-- **Python 3.12+** with `pip`
-- **Node.js 18+** with `npm`
-
-### 1. Clone & Configure
 ```bash
-git clone https://github.com/vjb/WellActually.ai.git
-cd WellActually.ai
-cp .env.example .env
-# Edit .env with your API keys (FEATHERLESS_API_KEY, AIML_API_KEY, BAND_API_KEY, GITHUB_TOKEN)
-```
+# Clone & configure
+git clone https://github.com/vjb/WellActually.ai.git && cd WellActually.ai
+cp .env.example .env  # Add: AIML_API_KEY, BAND_API_KEY, GH_TOKEN
 
-### 2. Install Dependencies
-```bash
-# Python
-python -m venv .venv
-.venv/Scripts/activate  # Windows
-pip install -r requirements.txt
+# Install
+python -m venv .venv && .venv/Scripts/activate && pip install -r requirements.txt
+cd frontend && npm install && cd ..
 
-# Frontend
-cd frontend && npm install
-```
+# Run
+python -m uvicorn src.server:app --port 8000  # Backend
+cd frontend && npm run dev                     # Frontend → http://localhost:5173
 
-### 3. Run Tests
-```bash
+# Test
 python -m pytest tests/test_swarm.py -v
 ```
-
----
-
-## 🖥️ Running the Swarm Control Center
-
-1. **Start Backend**:
-   ```bash
-   python -m uvicorn src.server:app --port 8000
-   ```
-2. **Start Frontend**:
-   ```bash
-   cd frontend && npm run dev
-   ```
-3. Open `http://localhost:5173`
-
-4. **Run a Review**:
-   - Enter a repository (e.g. `vjb/WellActually.ai`)
-   - Select an open PR from the dropdown
-   - Click **Launch JIT Swarm**
-   - Watch agents synthesize, deploy, and debate in real time
-   - See the verdict scorecard when consensus is reached
 
 ---
 
@@ -191,11 +129,11 @@ python -m pytest tests/test_swarm.py -v
 | Feature | Traditional Tools | WellActually.ai |
 |---------|------------------|-----------------|
 | Reviewers | Static, pre-configured | **JIT-synthesized** from PR diff |
-| Model diversity | Single model | **Multi-LLM** (Llama-70B + GPT-4o) |
-| Review scope | Generic checklist | **Domain-specific** adversarial mandate |
+| Model diversity | Single model | **Multi-LLM** (o3-mini + GPT-4o + GPT-4o-mini) |
+| Agent coordination | Direct API calls | **Band.ai rooms** with full lifecycle |
 | Governance | Post-merge scanning | **Pre-merge** Zero-Trust gate |
-| Human oversight | Optional | **Mandatory** on consensus deadlock |
-| Agent lifecycle | Persistent | **Ephemeral** — synthesized per review |
+| Agent lifecycle | Persistent | **Ephemeral** — dissolves after review |
+| Compliance checks | Generic rules | **Context-aware** — only flags what the PR actually touches |
 
 ---
 
@@ -203,8 +141,6 @@ python -m pytest tests/test_swarm.py -v
 
 Built by **VJ Beltrani** for the [Band of Agents Hackathon](https://lablab.ai/event/band-of-agents-hackathon) (June 12–19, 2026).
 
----
-
 ## 📜 License
 
-MIT License. Built for the **Band of Agents Hackathon** (June 12–19, 2026).
+MIT License.

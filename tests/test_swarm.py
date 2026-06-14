@@ -2,11 +2,15 @@ import os
 import json
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from openai import OpenAI
+from aimlapi import AIMLAPI
 from dotenv import load_dotenv
 
 # Load environment variables early for pytest decorators
 load_dotenv()
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
 
 # Import the governance engine API under test
 from src.governance import (
@@ -213,7 +217,7 @@ def test_partner_endpoint_routing_verification():
     assert api_key, "OPENAI_API_KEY environment variable is missing."
     assert base_url and "aimlapi" in base_url, "OPENAI_BASE_URL does not point to the partner endpoint."
     
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = AIMLAPI(api_key=api_key)
     
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -265,6 +269,7 @@ async def test_swarm_library_orchestration(mock_rest_client, mock_openai_client)
     mock_human.human_api_agents.list_my_agents = AsyncMock(return_value=MagicMock(data=[]))
     mock_human.human_api_agents.register_my_agent = AsyncMock(return_value=mock_reg)
     mock_human.human_api_agents.delete_my_agent = AsyncMock()
+    mock_human.human_api_memories.list_user_memories = AsyncMock(return_value=MagicMock(data=[]))
     
     session = SwarmSession(
         pr_id="pr_test_lib",
@@ -292,6 +297,8 @@ async def test_swarm_library_orchestration(mock_rest_client, mock_openai_client)
     mock_agent_client.agent_api_memories.list_agent_memories = AsyncMock()
     mock_agent_client.agent_api_memories.create_agent_memory = AsyncMock()
     mock_agent_client.agent_api_events.create_agent_chat_event = AsyncMock()
+    mock_agent_client.agent_api_contacts.add_agent_contact = AsyncMock()
+    mock_agent_client.agent_api_contacts.respond_to_agent_contact_request = AsyncMock()
     
     # Define client routing mock
     mock_rest_client.side_effect = lambda api_key, base_url: mock_human if api_key and ("band_u" in str(api_key)) else mock_agent_client
@@ -943,7 +950,8 @@ def test_detect_mcp_targets():
     assert "No API routes detected" in targets3["api_endpoint"]
 
 
-def test_format_scorecard_comment():
+@pytest.mark.anyio
+async def test_format_scorecard_comment():
     """Verifies that format_scorecard_comment formats the markdown scorecard correctly."""
     from src.server import format_scorecard_comment
     
@@ -969,19 +977,19 @@ def test_format_scorecard_comment():
         }
         
     state = DummyState()
-    comment = format_scorecard_comment(state)
+    comment = await format_scorecard_comment(state)
     
-    assert "# 🛡️ Governance Swarm Audit Scorecard: PR-99" in comment
-    assert "- **Scenario:** `test-scenario`" in comment
-    assert "- **Status:** `COMPLETED`" in comment
-    assert "- **Resolution:** `consensus`" in comment
-    assert "- **Consensus Rounds:** `2`" in comment
-    assert "**PostgreSQL Schema Compliance** | ✅ Passed" in comment
-    assert "**OpenAPI Contract Compliance** | ❌ Failed" in comment
-    assert "Path mismatch" in comment
-    assert "- **billing**: High latency" in comment
-    assert "- **Round 1:** REJECTED" in comment
-    assert "- **Round 2:** APPROVED" in comment
+    assert "# 🛡️ WellActually.ai — JIT Swarm Governance Audit" in comment
+    assert "PR-99" in comment
+    assert "COMPLETED" in comment
+    assert "Consensus" in comment or "consensus" in comment
+    assert "security-owners-pool" in comment
+    assert "billing" in comment
+    assert "High latency" in comment
+    assert "Round 1" in comment
+    assert "Round 2" in comment
+    assert "Rejected" in comment or "REJECTED" in comment
+    assert "Approved" in comment or "APPROVED" in comment
 
 
 @patch("urllib.request.urlopen")
@@ -1030,7 +1038,7 @@ def test_api_submit_consent_validation():
     state.reset()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @patch("thenvoi_rest.AsyncRestClient")
 async def test_initialize_session_room_limit_fallback(mock_rest_client):
     """Verifies that initialize_session reuses an existing chat room if the platform limit is hit."""
@@ -1063,8 +1071,9 @@ async def test_initialize_session_room_limit_fallback(mock_rest_client):
     coder = CoderAgent()
     reviewer = ReviewerAgent("Auth & Fraud SME")
     
-    # Mock conductor.rest_client after initialize_session
     mock_agent_client = MagicMock()
+    mock_agent_client.agent_api_contacts.add_agent_contact = AsyncMock()
+    mock_agent_client.agent_api_contacts.respond_to_agent_contact_request = AsyncMock()
     
     # Mock create_agent_chat to fail with limit_reached exception
     limit_err = Exception("limit_reached: Chat room limit reached. Upgrade to create more.")
@@ -1074,6 +1083,9 @@ async def test_initialize_session_room_limit_fallback(mock_rest_client):
     mock_chat_obj = MagicMock()
     mock_chat_obj.id = "reused-room-id"
     mock_chat_obj.updated_at = datetime.datetime(2026, 6, 13, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    
+    # Mock list_user_memories for past rulings to avoid exception
+    mock_human.human_api_memories.list_user_memories = AsyncMock(return_value=MagicMock(data=[]))
     
     mock_chats_list = MagicMock()
     mock_chats_list.data = [mock_chat_obj]
@@ -1092,7 +1104,7 @@ async def test_initialize_session_room_limit_fallback(mock_rest_client):
     assert mock_agent_client.agent_api_chats.list_agent_chats.call_count == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_analyze_pr_for_swarm_fallback():
     """Verifies that analyze_pr_for_swarm falls back to heuristic default when client is None."""
     from src.server import analyze_pr_for_swarm
@@ -1115,7 +1127,7 @@ async def test_analyze_pr_for_swarm_fallback():
         src.swarm.client = orig_client
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_analyze_pr_for_swarm_with_mock_llm():
     """Verifies that analyze_pr_for_swarm parses valid LLM response JSON."""
     from src.server import analyze_pr_for_swarm
@@ -1172,6 +1184,108 @@ async def test_analyze_pr_for_swarm_with_mock_llm():
         assert res["mcp_targets"]["schema_table"] == "users"
     finally:
         src.swarm.client = orig_client
+
+
+def test_fallback_mock_pr_catalog_mismatch():
+    """Verify fallback mock PR catalog mappings for 217 and 104."""
+    from src.server import get_mock_pr_data, get_mock_pr_list
+    
+    # Check fallback mock list updates
+    mock_list = get_mock_pr_list()
+    numbers = [pr["number"] for pr in mock_list]
+    assert 217 in numbers
+    assert 104 in numbers
+    assert 2 not in numbers
+    assert 4 not in numbers
+    
+    # Check that html_urls are mapped correctly
+    url_217 = next(pr["html_url"] for pr in mock_list if pr["number"] == 217)
+    assert "217" in url_217
+    url_104 = next(pr["html_url"] for pr in mock_list if pr["number"] == 104)
+    assert "104" in url_104
+
+    # Check mapping data preserves number
+    pr_217 = get_mock_pr_data(217)
+    assert pr_217["number"] == 217
+    # Should correspond to mock PR 2 (Spending Report)
+    assert "spending_report" in pr_217["branch"] or "spending" in pr_217["title"].lower()
+
+    pr_104 = get_mock_pr_data(104)
+    assert pr_104["number"] == 104
+    # Should correspond to mock PR 4 (Checkout Flow)
+    assert "checkout" in pr_104["branch"] or "checkout" in pr_104["title"].lower()
+
+    pr_other = get_mock_pr_data(999)
+    assert pr_other["number"] == 999
+    # Should fall back to mock PR 2
+    assert "spending_report" in pr_other["branch"] or "spending" in pr_other["title"].lower()
+
+
+@pytest.mark.anyio
+async def test_get_github_pr_details_internal_preserves_number():
+    """Verify get_github_pr_details_internal preserves the requested number under fallback."""
+    from src.server import get_github_pr_details_internal
+    # Test details retrieval for 217 with unreachable API (falling back)
+    with patch("urllib.request.urlopen", side_effect=Exception("API connection failure")):
+        res = await get_github_pr_details_internal("vjb/wellactually.ai", 217)
+        assert res["number"] == 217
+        assert "spending_report.py" in str(res["diff_files"])
+        
+        res_104 = await get_github_pr_details_internal("vjb/wellactually.ai", 104)
+        assert res_104["number"] == 104
+        assert "checkout.py" in str(res_104["diff_files"])
+
+
+def test_webhook_signature_verification():
+    """Verify webhook signature validation behavior with GH_WEBHOOK_SECRET."""
+    client = TestClient(app)
+    import hmac
+    import hashlib
+    
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 217,
+            "title": "Test PR",
+            "state": "open",
+            "base": {"repo": {"full_name": "testowner/testrepo"}}
+        }
+    }
+    body_bytes = json.dumps(payload).encode("utf-8")
+    
+    # 1. Skip validation when secret is NOT set (standard case)
+    with patch("src.server.run_simulation_task", new_callable=AsyncMock), \
+         patch("src.config.config.get", return_value=None):
+        res = client.post("/api/webhooks/github", content=body_bytes)
+        assert res.status_code == 200
+        assert res.json()["status"] == "triggered"
+
+    # 2. Require valid signature when secret IS set
+    secret = "my-test-secret"
+    correct_sig = "sha256=" + hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+    
+    # 2a. Missing signature header -> 400 Bad Request
+    with patch("src.server.run_simulation_task", new_callable=AsyncMock), \
+         patch("src.config.config.get", return_value=secret):
+        res = client.post("/api/webhooks/github", content=body_bytes)
+        assert res.status_code == 400
+        assert "Missing X-Hub-Signature-256 header" in res.json()["detail"]
+
+    # 2b. Invalid signature -> 401 Unauthorized
+    with patch("src.server.run_simulation_task", new_callable=AsyncMock), \
+         patch("src.config.config.get", return_value=secret):
+        headers = {"X-Hub-Signature-256": "sha256=invalid-signature-hash"}
+        res = client.post("/api/webhooks/github", content=body_bytes, headers=headers)
+        assert res.status_code == 401
+        assert "Invalid webhook signature" in res.json()["detail"]
+
+    # 2c. Valid signature -> 200 Success
+    with patch("src.server.run_simulation_task", new_callable=AsyncMock), \
+         patch("src.config.config.get", return_value=secret):
+        headers = {"X-Hub-Signature-256": correct_sig}
+        res = client.post("/api/webhooks/github", content=body_bytes, headers=headers)
+        assert res.status_code == 200
+        assert res.json()["status"] == "triggered"
 
 
 

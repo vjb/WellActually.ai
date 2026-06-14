@@ -38,6 +38,28 @@ flowchart TD
 
 ---
 
+## 🖥️ Swarm Control Center & Band.ai UI Screenshots
+
+Here is the glassmorphism control panel showing the JIT Swarm Review in action:
+
+### 1. Idle Dashboard State
+![Idle Dashboard State](./docs/screenshots/01_idle_state.png)
+*The clean, glassmorphic Control Center home screen showing available Pull Requests from GitHub and the initial stage indicators.*
+
+### 2. JIT Agent Synthesis & Running Debate
+![Running Debate](./docs/screenshots/03_running_debate.png)
+*The active debate in progress. Ephemeral review agents are synthesized on-the-fly from the PR's git diff and debate compliance in real-time.*
+
+### 3. Human-in-the-Loop Mediation (Halted State)
+![Halted Deadlock State](./docs/screenshots/04_halted_deadlock.png)
+*When a deadlock occurs between the Coder and Reviewers, the room halts and prompts the Human Operator for a compromise guideline.*
+
+### 4. Band.ai Platform Operations Dashboard
+![Band Platform Tab](./docs/screenshots/e2e_09_band_platform.png)
+*Under the hood: the Band Platform tab displays the registered JIT agent accounts, active room ID, cryptographic contacts list, and websocket telemetry.*
+
+---
+
 ## 🔗 Band.ai SDK — Core Integration Wiki
 
 WellActually.ai coordinates its JIT governance swarm using Band.ai's SDK. The key SDK features utilized in our JIT approach include:

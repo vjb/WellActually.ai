@@ -89,6 +89,9 @@ When the JIT Review Swarm gets stuck in an adversarial deadlock (where the revie
 
 Using **Band.ai's Human API**, the human operator can inject a compromise guideline directly into the room's memories. This immediately kicks off **Round 3 of the debate**, prompting the Lead Coder to adopt the compromise, satisfying the reviewers and securing agreement.
 
+### 📹 E2E Demo Video
+[🎬 Click here to view the E2E Deadlock Resolution Demo Video](./docs/demo_recording.webm)
+
 ### How to run the deadlock resolution demo:
 1. Open the dashboard (http://localhost:5173).
 2. Select **PR #16 — Add admin metrics dashboard with performance queries** from the Pull Request dropdown.

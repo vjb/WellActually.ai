@@ -70,7 +70,6 @@ WellActually.ai coordinates its JIT governance swarm using Band.ai's SDK. The ke
 * **Create Memories**: Save round findings for subsequent rounds in [src/swarm.py#L1168](./src/swarm.py#L1168) and [src/swarm.py#L1206](./src/swarm.py#L1206).
 * **Supersede Memories**: Overwrite older findings with new feedback in [src/swarm.py#L1363](./src/swarm.py#L1363).
 * **Archive Memories**: Clean up all memories on completion to maintain zero persistence in [src/swarm.py#L1422](./src/swarm.py#L1422).
-* **Zero-Downtime Fallback**: Automatically redirects memory read/write requests to a local JSON cache if the Band Memories API returns a `403 Forbidden` plan restriction, preventing any swarming interruptions.
 
 ### 2. Message Lifecycle & Queues
 * **Create Chat Messages**: Debate statements are posted in [src/swarm.py#L1030](./src/swarm.py#L1030).

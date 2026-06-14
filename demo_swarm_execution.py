@@ -113,7 +113,7 @@ async def main():
         table.add_column("Status", style="bold green")
         table.add_row("Codex CLI Redirection", os.getenv("OPENAI_BASE_URL", "https://api.aimlapi.com/v1"), "ACTIVE")
         table.add_row("Band.ai room management", "BAND_API_KEY set", "CONNECTED")
-        table.add_row("Featherless AI Inference", "unsloth/Meta-Llama-3.1-70B-Instruct", "ACTIVE")
+        table.add_row("AIML API Inference", "unsloth/Meta-Llama-3.1-70B-Instruct", "ACTIVE")
         table.add_row("Adversarial pairing model", "Claude 3.7 vs Codex 5.4", "STABLE")
         console.print(table)
         

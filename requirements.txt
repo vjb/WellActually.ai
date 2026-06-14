@@ -5,11 +5,11 @@
 fastapi>=0.115.0
 uvicorn>=0.34.0
 
-# LLM provider clients (AIML API + Featherless AI)
-openai>=1.60.0
+# LLM provider clients (AIML API)
+aimlapi-sdk-python>=2.24.0rc1
 
 # Band.ai REST SDK
-thenvoi-client-rest>=0.1.0
+thenvoi-client-rest>=0.0.7
 
 # HTTP client
 httpx>=0.28.0
@@ -32,6 +32,5 @@ PyJWT>=2.0.0
 pytest>=8.0.0
 pytest-anyio>=0.0.0
 
-# Version compatibility pin
-typing-extensions<4.13.0
+
 

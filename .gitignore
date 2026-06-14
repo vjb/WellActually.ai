@@ -6,6 +6,7 @@
 # Python virtual environment and caches
 .venv/
 venv/
+venv39/
 ENV/
 __pycache__/
 *.pyc
@@ -39,3 +40,13 @@ uat_*.png
 
 # Runtime-generated data
 mock_infrastructure/local_memories.json
+
+# Scratch files and scripts
+scratch/
+
+# Temp screenshots
+screenshot_current.png
+
+# Verification scripts
+tests/verify_challenger_scenarios.py
+

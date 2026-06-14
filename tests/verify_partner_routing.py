@@ -1,6 +1,6 @@
 import os
 import sys
-from openai import OpenAI
+from aimlapi import AIMLAPI
 from dotenv import load_dotenv
 
 def test_partner_endpoint_routing():
@@ -25,9 +25,8 @@ def test_partner_endpoint_routing():
 
     # 2. Initialize Client mirroring Codeband's initialization pattern
     try:
-        client = OpenAI(
-            api_key=api_key,
-            base_url=base_url
+        client = AIMLAPI(
+            api_key=api_key
         )
         print("[INFO] OpenAI Client initialized with custom base_url configuration.")
         

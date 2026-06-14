@@ -1,10 +1,8 @@
 {
   "status": "IDLE",
-  "scenario": "rbac_bypass",
-  "pr_id": "PR-217",
-  "diff_files": [
-    "src/billing/spending_report.py"
-  ],
+  "scenario": "dynamic",
+  "pr_id": "PR-DYNAMIC",
+  "diff_files": [],
   "triage_result": null,
   "consensus_round": 0,
   "room_id": null,
@@ -22,7 +20,7 @@
     "api_endpoint": "/api/v1/billing/spending",
     "rbac_target": "billing_profiles.spending_limit_usd"
   },
-  "generation": 13,
+  "generation": 2,
   "human_consent": null,
   "events": [],
   "active_agents": [],

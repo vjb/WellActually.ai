@@ -1,213 +1,125 @@
 # WellActually.ai 🧠⚡
 ### Just-in-Time Swarm Intelligence for Code Governance
-*Ephemeral, dynamically synthesized AI review agents — powered by **Band.ai**, **Featherless AI** & **AIML API**.*
+*Ephemeral, dynamically synthesized AI review agents — orchestrated through **Band.ai's SDK core**.*
 
-> **🏆 Track 2: Multi-Agent Software Development** — JIT agent synthesis, cross-model adversarial debate, and human-in-the-loop governance.
+> Pull Requests don't need static linters. They need an **on-demand governance swarm** — synthesized in real time from the diff itself, debating adversarially, and dissolving when done. That's WellActually.ai.
 
----
-
-## 🎬 Demo Video
-
-> *Coming soon — demo video will be added before submission.*
+> **🏆 Track 2: Multi-Agent Software Development** — JIT agent synthesis, cross-model adversarial debate, and autonomous governance.
 
 ---
 
-## 🚀 The Big Idea
+## 🧠 Just-in-Time (JIT) Swarm Intelligence
 
-Every code review tool today uses **static agents** — the same reviewers, the same checks, every time. WellActually.ai inverts this entirely:
-
-> **Governance is not a static rulebook. It's ephemeral, dynamically generated compute.**
-
-When a Pull Request arrives, WellActually.ai reads the diff, understands what domains are affected, and **synthesizes custom AI reviewer agents on the fly** — each with a unique persona, domain expertise, and adversarial mandate. These agents exist only for the duration of the review, then dissolve.
-
-This is **Just-in-Time Swarm Intelligence**: zero pre-configuration, infinite adaptability.
-
----
-
-## ✨ How It Works — The 5-Phase Pipeline
+WellActually.ai is built around the concept of **ephemeral code governance**. Instead of static, persistent review systems that consume resources indefinitely, we instantiate reviewer swarms dynamically when a PR is loaded or updated, and clean them up entirely when consensus is reached.
 
 ```mermaid
 flowchart TD
-    %% Styling
     classDef default fill:#111827,stroke:#374151,color:#f3f4f6,stroke-width:1px;
     classDef accent fill:#312e81,stroke:#4f46e5,color:#e0e7ff,stroke-width:2px;
-    classDef warning fill:#78350f,stroke:#d97706,color:#fef3c7,stroke-width:1px;
     classDef success fill:#064e3b,stroke:#059669,color:#ecfdf5,stroke-width:1px;
     
-    A[🎯 PR Opened]:::default --> B{🛡️ Zero-Trust Triage}:::default
-    B -->|High-Stakes Code Path| C[⌛ Human Approval Gate]:::warning
-    B -->|Clean / Safe Paths| D[🧠 JIT Swarm Synthesis]:::accent
-    C -->|Override & Approve| D
-    D -->|Synthesize Custom Persona system_prompt| E[🔗 Band.ai Chat Room Deployment]:::default
-    E --> F[⚔️ Adversarial Consensus Debate]:::default
-    F -->|Round 1-2 Review Passed| G[✓ Swarm Consensus Approved]:::success
-    F -->|Consensus Deadlock Halted| H[⚠️ Escalate to Human Operator]:::warning
-    G --> I[📊 Post Scorecard Comment to GitHub]:::default
-    H -->|Human Override Approve/Reject| I
+    A["🎯 PR Opened / Loaded"] --> B["🛡️ Zero-Trust Triage"]
+    B -->|JIT Synthesis| D["🧠 Analyze Diff & Synthesize Agents"]:::accent
+    D -->|Register on Band| E["🔗 Deploy Ephemeral Band Room"]
+    E --> F["⚔️ Multi-Round Adversarial Debate"]
+    F -->|Consensus Reached| G["✓ Approved"]:::success
+    F -->|Violations Found| H["🔄 Coder Revises + Re-Debate"]
+    H --> F
+    G --> I["📊 GitHub Scorecard + Audit Report"]
+    I --> J["🧹 Dissolve Swarm & Delete Agents"]
 ```
 
-### Phase 1: 🎯 PR Ingest
-- Select any public GitHub repository and open pull request
-- System fetches the PR metadata, diff, and file contents in real time
-- Zero configuration — point it at any repo
-
-### Phase 2: 🧠 JIT Agent Synthesis
-The conductor analyzes the PR diff and **dynamically generates** reviewer agents:
-- A GDPR data export PR → spawns a `Data Privacy Compliance SME` + `Database Security Auditor`
-- A billing API PR → spawns an `Auth & Fraud SME` + `Financial Data Compliance SME`
-- An admin dashboard PR → spawns an `Infrastructure Security SME` + `Performance Auditor`
-
-Each agent gets:
-- A **unique system prompt** tailored to its domain and the specific code changes
-- A **specific model assignment** (Llama-3.1-70B via Featherless AI for maximum review diversity)
-- A **mandate** — what to look for, what to reject, what to approve
-
-### Phase 3: 🔗 Band.ai Swarm Deployment
-- Agents are registered on the **Band.ai** platform with real credentials
-- A **Task Room** is created and all agents join as participants
-- The conductor orchestrates the review using Band.ai's messaging and context APIs
-
-### Phase 4: ⚔️ Adversarial Debate
-- The **Lead Coder** proposes code changes based on the PR diff
-- Each **JIT Reviewer** evaluates from their domain perspective
-- Agents debate across rounds until **consensus** or **deadlock**
-- If deadlocked: the system halts and escalates to a human operator
-
-### Phase 5: 📊 Verdict Scorecard
-Rich analytics showing:
-- Number of debate rounds, JIT agents synthesized, files analyzed
-- Approval/rejection breakdown per reviewer
-- Domains covered and outcome (consensus vs deadlock)
+### The JIT Lifecycle Flow
+1. **Zero-Trust Triage** ([src/governance.py:L96](./src/governance.py#L96)): When a PR is loaded, the system determines the risk category based on touched paths.
+2. **Dynamic Swarm Synthesis** ([src/server.py:L884](./src/server.py#L884)): Rather than static reviewer configurations, an LLM analyzes the PR diff and dynamically designs a custom governance panel. Each synthesized agent gets a specialized persona, domain expertise, and a customized system prompt tailored precisely to the files modified.
+3. **Band.ai Room Setup** ([src/swarm.py:L479](./src/swarm.py#L479)): The dynamically synthesized agents are registered on Band.ai, run trust handshakes, and join an isolated, ephemeral task room to conduct the audit.
+4. **Adversarial Debate & State Updates** ([src/swarm.py:L957](./src/swarm.py#L957)): The Lead Coder defends the code changes while Domain Reviewers run compliance checks. All statements use Band's message lifecycle states (`processing`, `processed`, `failed`) and events (`tool_call`, `tool_result`, `thought`, `task`, `error`).
+5. **Dissolution** ([src/swarm.py:L1390](./src/swarm.py#L1390)): Once a consensus verdict is reached, the audit scorecard is posted to the GitHub PR, all memories are archived, and the JIT agents are dynamically deleted from the platform to maintain zero persistence.
 
 ---
 
-## 🛡️ Zero-Trust Security Scanner
+## 🔗 Band.ai SDK — Core Integration Wiki
 
-Before the swarm launches, a **Zero-Trust triage scanner** automatically audits the PR:
-- Identifies high-stakes code paths (e.g., auth, billing, database schemas) and maps required validation contexts to the JIT agents.
-- Operates fully autonomously, deploying the swarm without blocking pipeline velocity.
-- Escalates to a human operator *only* if the adversarial debate loop reaches a consensus deadlock.
+WellActually.ai coordinates its JIT governance swarm using Band.ai's SDK. The key SDK features utilized in our JIT approach include:
+
+### 1. Ephemeral Memories (Context-Persistence)
+*Because our swarms are JIT and dissolve after a review, we use Band's Memories API to persist previous review findings across rounds of debate (so reviewers remember what was wrong in Round 1 when they look at Round 2).*
+* **List Memories**: Query previous round findings in [src/swarm.py#L1073](./src/swarm.py#L1073).
+* **Create Memories**: Save round findings for subsequent rounds in [src/swarm.py#L1168](./src/swarm.py#L1168) and [src/swarm.py#L1206](./src/swarm.py#L1206).
+* **Supersede Memories**: Overwrite older findings with new feedback in [src/swarm.py#L1363](./src/swarm.py#L1363).
+* **Archive Memories**: Clean up all memories on completion to maintain zero persistence in [src/swarm.py#L1422](./src/swarm.py#L1422).
+
+### 2. Message Lifecycle & Queues
+* **Create Chat Messages**: Debate statements are posted in [src/swarm.py#L1030](./src/swarm.py#L1030).
+* **Lifecycle State Tracking**: Mark messages as `processing` in [src/swarm.py#L1043](./src/swarm.py#L1043), `processed` in [src/swarm.py#L1046](./src/swarm.py#L1046), or `failed` in [src/swarm.py#L1153](./src/swarm.py#L1153).
+* **Context Rehydration**: Rehydrate full conversation history before each round of debate in [src/swarm.py#L982](./src/swarm.py#L982) and [src/swarm.py#L1060](./src/swarm.py#L1060).
+
+### 3. Agent Lifecycle & Trust Handshakes
+* **Register Agents**: Register Conductor, Coder, and Reviewers dynamically in [src/swarm.py#L699-L737](./src/swarm.py#L699-L737).
+* **Delete Agents**: Enforce zero persistence by deleting registered agents on completion in [src/swarm.py#L1448](./src/swarm.py#L1448).
+* **Trust Contacts Handshake**: Establish peer contacts and trust approvals for JIT coordination in [src/swarm.py#L751-L782](./src/swarm.py#L751-L782).
+
+---
+
+## 🎬 Human-in-the-Loop Mediation Demo
+
+When the JIT Review Swarm gets stuck in an adversarial deadlock (where the reviewers continue to reject code changes through two rounds), the system halts and escalates to a human operator. 
+
+Using **Band.ai's Human API**, the human operator can inject a compromise guideline directly into the room's memories. This immediately kicks off **Round 3 of the debate**, prompting the Lead Coder to adopt the compromise, satisfying the reviewers and securing agreement.
+
+### How to run the deadlock resolution demo:
+1. Open the dashboard (http://localhost:5173).
+2. Select **PR #16 — Add admin metrics dashboard with performance queries** from the Pull Request dropdown.
+3. Click **Launch JIT Swarm**.
+4. The swarm will run through Round 1 and Round 2, identifying database violations in the SQL queries (e.g. missing docstrings or cache hit rate fields).
+5. At the end of Round 2, the swarm will deadlock and the status will update to `HALTED` (waiting for human mediation).
+6. A compromise input field will appear. Type this compromise guideline:
+   > *"Add a docstring to get_cache_stats and implement a dummy unit test function test_get_cache_stats to verify it returns hit_rate."*
+7. Click **Submit Compromise**.
+8. **Watch the magic happen**: Round 3 starts immediately, the Lead Coder writes the docstring and test function, and the Database Query Auditor passes the check to complete the PR review successfully.
+
+---
+
+## 🚀 Production Best Practices
+
+In a real-world enterprise pipeline, WellActually.ai runs fully autonomously:
+1. **GitHub Webhooks**: The FastAPI backend exposes a `POST /api/webhooks/github` endpoint ([src/server.py#L1903](./src/server.py#L1903)) that listens for `pull_request` event payloads.
+2. **Automated Trigger**: When a developer opens a PR or pushes new commits, the webhook automatically starts the JIT Swarm Review in the background.
+3. **GitHub Scorecard Comment**: Once consensus is reached, the Conductor automatically posts the rich markdown scorecard comment directly back to the GitHub Pull Request ([src/swarm.py#L1460](./src/swarm.py#L1460)).
 
 ---
 
 ## 🤝 Platform & Partner Stack
 
-### 1. **Band.ai** — Core Agent Collaboration
-The entire swarm runs on Band.ai's REST SDK:
-- **Agent Registration**: Each JIT-synthesized agent is registered with unique credentials
-- **Task Rooms**: Dynamic rooms created per review session
-- **Real-time Messaging**: Agents exchange code proposals and critiques via `@mentions`
-- **Context Rehydration**: Reviewers query chat history before evaluating
-- **Agent Reuse**: Automatically detects platform limits and reuses pre-registered credentials
-
-### 2. **Featherless AI** — Sponsor Partner
-JIT Reviewer agents run on `unsloth/Meta-Llama-3.1-70B-Instruct` via Featherless AI's serverless endpoint. Using a different model architecture from the coder ensures genuine **adversarial diversity** — the reviewers don't share the coder's blind spots.
-
-### 3. **AIML API** — Sponsor Partner
-The Conductor and Lead Coder run on `gpt-4o-mini` via AIML API. By routing through the AIML gateway with standard OpenAI client compatibility, we achieve seamless multi-provider orchestration.
-
-### 4. **GitHub** — VCS Integration
-- **Live PR Loading**: Fetch any public PR's metadata, diff, and file contents
-- **Scorecard Commenting**: Post audit results directly back to the PR as a comment
-- **Dynamic PR Creation**: Demo PRs created programmatically for diverse review scenarios
+* **Band.ai** (Orchestration): Full SDK coordination across identity, peers, contacts, rooms, messages, events, memories.
+* **AIML API** (LLM routing): Migrated to the official `aimlapi` SDK library ([requirements.txt](./requirements.txt)). Routes requests to `o3-mini` (high-stakes reasoning), `gpt-4o` (general debate/triage), and `gpt-4o-mini` (speed).
+* **GitHub**: Programmatic issue and PR integration with auto-commenting and fallback issues.
 
 ---
 
-## 📂 Project Structure
+## 🛠️ Quick Start
 
-### ⚙️ Core Swarm & Backend
-| File | Description |
-|------|-------------|
-| [`src/swarm.py`](src/swarm.py) | Async swarm orchestration — maps Python Agent classes to Band.ai REST SDK. Offloads LLM calls to threadpool via `asyncio.to_thread`. |
-| [`src/server.py`](src/server.py) | FastAPI server — REST endpoints for swarm state, events, HITL consent, and PR management. JIT agent synthesis and adversarial debate loop. |
-| [`src/governance.py`](src/governance.py) | Deterministic compliance engine — CODEOWNERS triage, ConsensusTracker, schema/RBAC/OpenAPI verification, TelemetryScanner. |
-
-### 💻 Frontend Dashboard
-| File | Description |
-|------|-------------|
-| [`frontend/src/App.jsx`](frontend/src/App.jsx) | React Swarm Control Center — cinematic 5-phase pipeline UI with live agent topology, adversarial debate feed, HITL controls, and verdict scorecard. |
-| [`frontend/src/index.css`](frontend/src/index.css) | Dark-themed glassmorphism design system with micro-animations, glow effects, and responsive layout. |
-
-### 🧪 Tests
-| File | Description |
-|------|-------------|
-| [`tests/test_swarm.py`](tests/test_swarm.py) | Comprehensive test suite covering governance checks, consensus tracking, JIT synthesis, schema compliance, RBAC validation, and full swarm integration. |
-
----
-
-## 🛠️ Installation & Setup
-
-### Prerequisites
-- **Python 3.12+** with `pip`
-- **Node.js 18+** with `npm`
-
-### 1. Clone & Configure
 ```bash
-git clone https://github.com/vjb/WellActually.ai.git
-cd WellActually.ai
-cp .env.example .env
-# Edit .env with your API keys (FEATHERLESS_API_KEY, AIML_API_KEY, BAND_API_KEY, GITHUB_TOKEN)
+# Clone & configure
+git clone https://github.com/vjb/WellActually.ai.git && cd WellActually.ai
+cp .env.example .env  # Add your AIML_API_KEY, BAND_API_KEY, and GH_TOKEN
+
+# Install dependencies (virtual environment is managed via local tools)
+python -m venv .venv && .venv/Scripts/activate && pip install -r requirements.txt
+cd frontend && npm install && cd ..
+
+# Run servers
+python -m uvicorn src.server:app --port 8000  # FastAPI Backend
+cd frontend && npm run dev                     # Vite Frontend (renders at http://localhost:5173)
+
+# Run test suite
+cmd.exe /c "set USE_REAL_DB=false && .venv/Scripts/pytest.exe -k test_swarm"
 ```
-
-### 2. Install Dependencies
-```bash
-# Python
-python -m venv .venv
-.venv/Scripts/activate  # Windows
-pip install -r requirements.txt
-
-# Frontend
-cd frontend && npm install
-```
-
-### 3. Run Tests
-```bash
-python -m pytest tests/test_swarm.py -v
-```
-
----
-
-## 🖥️ Running the Swarm Control Center
-
-1. **Start Backend**:
-   ```bash
-   python -m uvicorn src.server:app --port 8000
-   ```
-2. **Start Frontend**:
-   ```bash
-   cd frontend && npm run dev
-   ```
-3. Open `http://localhost:5173`
-
-4. **Run a Review**:
-   - Enter a repository (e.g. `vjb/WellActually.ai`)
-   - Select an open PR from the dropdown
-   - Click **Launch JIT Swarm**
-   - If Zero-Trust halts the pipeline, click **Approve** to authorize
-   - Watch agents synthesize, deploy, and debate in real time
-   - See the verdict scorecard when consensus is reached
-
----
-
-## 🔑 Key Differentiators
-
-| Feature | Traditional Tools | WellActually.ai |
-|---------|------------------|-----------------|
-| Reviewers | Static, pre-configured | **JIT-synthesized** from PR diff |
-| Model diversity | Single model | **Multi-LLM** (Llama-70B + GPT-4o) |
-| Review scope | Generic checklist | **Domain-specific** adversarial mandate |
-| Governance | Post-merge scanning | **Pre-merge** Zero-Trust gate |
-| Human oversight | Optional | **Mandatory** for high-stakes paths |
-| Agent lifecycle | Persistent | **Ephemeral** — synthesized per review |
 
 ---
 
 ## 👥 Team
-
 Built by **VJ Beltrani** for the [Band of Agents Hackathon](https://lablab.ai/event/band-of-agents-hackathon) (June 12–19, 2026).
 
----
-
 ## 📜 License
-
-MIT License. Built for the **Band of Agents Hackathon** (June 12–19, 2026).
+MIT License.

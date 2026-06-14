@@ -5,7 +5,7 @@ import time
 import json
 import logging
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -17,122 +17,223 @@ from src.governance import verify_schema_compliance, verify_openapi_compliance, 
 
 logger = logging.getLogger("FastAPIServer")
 
-def format_scorecard_comment(state) -> str:
-    """Formats the markdown scorecard comment to post to GitHub."""
-    # Emoji indicators based on compliance status
-    def get_emoji(check):
-        if not check:
-            return "❔ N/A"
-        return "✅ Passed" if check.get("compliant", False) else "❌ Failed"
-        
-    schema_emoji = get_emoji(state.schema_check)
-    openapi_emoji = get_emoji(state.openapi_check)
-    rbac_emoji = get_emoji(state.rbac_check)
-    
-    # Format violations lists
-    def format_violations(check):
-        if not check or not check.get("violations"):
-            return "No violations."
-        return "\n".join(f"- {v}" for v in check["violations"])
+async def format_scorecard_comment(state) -> str:
+    """Formats the markdown scorecard comment to post to GitHub dynamically using LLM if available."""
+    from src.swarm import client
+    # Build list of active reviewers and their domains/verdicts
+    active_agents = getattr(state, "active_agents", []) or []
+    reviewer_info = []
+    for agent in active_agents:
+        if agent.get("id", "").startswith("reviewer"):
+            reviewer_info.append(f"- **{agent.get('role')}** (Domain: `{agent.get('domain')}`): `{agent.get('model')}`")
 
-    schema_violations = format_violations(state.schema_check)
-    openapi_violations = format_violations(state.openapi_check)
-    rbac_violations = format_violations(state.rbac_check)
-    
-    # Format anomalies list
-    if state.watchdog_logs:
-        anomalies_str = "\n".join(f"- **{a['service']}**: {a['message']}" for a in state.watchdog_logs)
-    else:
-        anomalies_str = "No anomalies detected."
-        
-    # Format debate rounds summary
-    debate_rounds_info = f"Adversarial debate completed in {state.consensus_round} rounds."
-    if state.debate_summary:
-        round_hist = state.debate_summary.get("round_history", [])
-        if round_hist:
-            debate_rounds_info += "\n" + "\n".join(
-                f"- **Round {r.get('round')}:** {r.get('outcome', 'unknown').upper()}"
-                for r in round_hist
-            )
+    # Gather any check details
+    checks_performed = []
+    if state.schema_check:
+        checks_performed.append({
+            "name": "Database Schema Integrity",
+            "compliant": state.schema_check.get("compliant", False),
+            "violations": state.schema_check.get("violations", [])
+        })
+    if state.openapi_check:
+        checks_performed.append({
+            "name": "API Contract Compliance",
+            "compliant": state.openapi_check.get("compliant", False),
+            "violations": state.openapi_check.get("violations", [])
+        })
+    if state.rbac_check:
+        checks_performed.append({
+            "name": "Access Control Policy Verification",
+            "compliant": state.rbac_check.get("compliant", False),
+            "violations": state.rbac_check.get("violations", [])
+        })
 
-    triage_info = "Status: OK"
-    if state.triage_result:
-        triage_status = state.triage_result.get("status")
-        req_approvals = ", ".join(state.triage_result.get("required_approvals", []))
-        if triage_status == "PENDING_HUMAN_APPROVAL":
-            triage_info = f"⚠️ Zero-Trust Check FAILED. Halted for human approval.\n- **Required approvals:** {req_approvals}"
+    # Prepare inputs for the LLM
+    pr_details = {
+        "pr_id": getattr(state, "pr_id", ""),
+        "title": getattr(state, "pr_title", ""),
+        "branch": getattr(state, "pr_branch", ""),
+        "status": getattr(state, "status", ""),
+        "resolution_type": getattr(state, "resolution_type", ""),
+        "consensus_round": getattr(state, "consensus_round", 0),
+        "diff_files": getattr(state, "diff_files", [])
+    }
+    
+    # Heuristic fallback if client is offline or fails
+    def build_heuristic_comment():
+        # Emoji indicators based on compliance status
+        def get_emoji(check):
+            if not check:
+                return "❔ N/A"
+            return "✅ Passed" if check.get("compliant", False) else "❌ Failed"
+            
+        schema_emoji = get_emoji(state.schema_check)
+        openapi_emoji = get_emoji(state.openapi_check)
+        rbac_emoji = get_emoji(state.rbac_check)
+        
+        def format_violations(check):
+            if not check or not check.get("violations"):
+                return "No violations."
+            return "\n".join(f"- {v}" for v in check["violations"])
+
+        schema_violations = format_violations(state.schema_check)
+        openapi_violations = format_violations(state.openapi_check)
+        rbac_violations = format_violations(state.rbac_check)
+        
+        anomalies_str = "\n".join(f"- **{a['service']}**: {a['message']}" for a in state.watchdog_logs) if state.watchdog_logs else "No anomalies detected."
+        
+        debate_rounds_info = f"Adversarial debate completed in {state.consensus_round} rounds."
+        if state.debate_summary:
+            round_hist = state.debate_summary.get("round_history", [])
+            if round_hist:
+                debate_rounds_info += "\n" + "\n".join(f"- **Round {r.get('round')}:** {r.get('outcome', 'unknown').upper()}" for r in round_hist)
+            summary_text = state.debate_summary.get("summary_text")
+            if summary_text:
+                debate_rounds_info += f"\n\n#### 📝 Swarm Debate Executive Summary\n{summary_text}"
+
+        triage_info = "Status: OK"
+        if state.triage_result:
+            triage_status = state.triage_result.get("status")
+            req_approvals = ", ".join(state.triage_result.get("required_approvals", []))
+            if triage_status == "PENDING_HUMAN_APPROVAL":
+                triage_info = f"⚠️ Zero-Trust Check FAILED. Halted for human approval.\n- **Required approvals:** {req_approvals}"
+            else:
+                triage_info = f"✅ Clean triage. Status: {triage_status}"
+
+        # Build topology text
+        topology_lines = [
+            "- **👑 Conductor** (`@conductor`): Orchestrates Task Room lifecycle.",
+            "- **💻 Lead Coder** (`@coder`): Proposes and refactors implementation draft."
+        ]
+        for idx, agent in enumerate(active_agents):
+            if agent.get("id", "").startswith("reviewer"):
+                role = agent.get("role", "Code Auditor")
+                handle = f"@reviewer-{role.replace(' ', '_').replace('&', 'and').lower()}"
+                icon = agent.get("icon", "🤖")
+                model = agent.get("model", "gpt-4o-mini")
+                domain = agent.get("domain", "general")
+                topology_lines.append(f"- **{icon} {role}** (`{handle}`): `{model}` · Domain: `{domain}` · ⚡ JIT Synthesized")
+        topology_text = "\n".join(topology_lines)
+
+        room_line = f"- **Band.ai Task Room:** `{state.room_id}`" if getattr(state, "room_id", None) else ""
+        
+        domains = list(set(a.get("domain", "") for a in active_agents if a.get("id", "").startswith("reviewer") and a.get("domain")))
+        if domains:
+            verification_section = "### 🛠️ Domains Analyzed\n" + "\n".join(f"- `{d}`" for d in sorted(domains))
         else:
-            triage_info = f"✅ Clean triage. Status: {triage_status}"
+            verification_section = "### 🛠️ Domains Analyzed\n- No database, API, or access-control targets detected"
 
-    auth_role = getattr(state, "reviewer_auth_role", "Auth & Fraud SME")
-    cart_role = getattr(state, "reviewer_cart_role", "Cart SME")
-    auth_handle = f"@reviewer-{auth_role.replace(' ', '_').replace('&', 'and').lower()}"
-    cart_handle = f"@reviewer-{cart_role.replace(' ', '_').replace('&', 'and').lower()}"
-    room_id = getattr(state, "room_id", None)
-    room_line = f"- **Band.ai Task Room ID:** `{room_id}`" if room_id else ""
+        # Build checks table dynamically
+        checks_table_rows = []
+        violations_section = ""
+        for check in checks_performed:
+            emoji = "✅ Passed" if check["compliant"] else "❌ Failed"
+            checks_table_rows.append(f"| **{check['name']}** | {emoji} | Automated verification check |")
+            if not check["compliant"] and check["violations"]:
+                violations_section += f"\n#### 📁 {check['name']} Violations\n" + "\n".join(f"- {v}" for v in check["violations"]) + "\n"
 
-    body = f"""# 🛡️ Governance Swarm Audit Scorecard: {state.pr_id}
+        checks_table = ""
+        if checks_table_rows:
+            checks_table = "### 🛠️ Code Verification Checks\n| Check Category | Compliance Status | Details |\n| :--- | :--- | :--- |\n" + "\n".join(checks_table_rows)
 
-### 📊 Simulation Summary
-- **Scenario:** `{state.scenario}`
-- **Status:** `{state.status}`
-- **Resolution:** `{state.resolution_type or 'N/A'}`
-- **Consensus Rounds:** `{state.consensus_round}`
+        pr_id_val = getattr(state, "pr_id", "")
+        status_val = getattr(state, "status", "")
+        diff_files_len = len(getattr(state, "diff_files", []))
+
+        body = f"""# 🛡️ WellActually.ai — JIT Swarm Governance Audit
+
+> **{pr_id_val}** · `{status_val}` · {diff_files_len} files analyzed
+
+### 📊 Summary
+- **Resolution:** `{getattr(state, "resolution_type", "") or 'N/A'}`
+- **Consensus Rounds:** `{getattr(state, "consensus_round", 0)}`
 {room_line}
 
-### 🤖 Band.ai Swarm Topology & Agent Identities
-- **👑 Conductor Orchestrator** (`@conductor`): Routed via **AIML API** (GPT-4o-mini). Orchestrates Task Room lifecycle.
-- **💻 Lead Coder** (`@coder`): Routed via **AIML API** (GPT-4o-mini). Proposes and refactors implementation draft.
-- **💳 Reviewer A ({auth_role})** (`{auth_handle}`): Routed via **Featherless AI** (Unsloth Llama-3.1-70B). Audits database schema & RBAC policies using PostgreSQL verifier.
-- **🏗️ Reviewer B ({cart_role})** (`{cart_handle}`): Routed via **AIML API** (GPT-4o-mini). Audits REST routes & API payloads using OpenAPI contract verifier.
+### 🧠 JIT Synthesized Swarm Topology
+{topology_text}
 
-### 🔒 Triage Compliance Results
+### 🔒 Compliance Triage
 {triage_info}
 
-### 🛠️ Code Verification Checks
-| Check Category | Compliance Status | Details |
-| :--- | :--- | :--- |
-| **PostgreSQL Schema Compliance** | {schema_emoji} | AST SQL column check |
-| **OpenAPI Contract Compliance** | {openapi_emoji} | Endpoint path/payload check |
-| **Middleware RBAC Check** | {rbac_emoji} | Sensitive financial column role verification |
+{verification_section}
 
-#### 📁 Schema Violations
-{schema_violations}
-
-#### 📁 OpenAPI Violations
-{openapi_violations}
-
-#### 📁 RBAC Violations
-{rbac_violations}
-
+{checks_table}
+{violations_section}
 ### 🚨 Telemetry Watchdog Scanner
 {anomalies_str}
 
 ### 💬 Consensus Debate History
 {debate_rounds_info}
 """
-    return body
+        return body
+
+    if not client:
+        return build_heuristic_comment()
+
+    # Call the LLM to format the scorecard dynamically and elegantly
+    prompt = f"""
+You are a code governance orchestrator. Generate a beautiful, professional, and clear Markdown scorecard comment to post to GitHub.
+Base your scorecard STRICTLY on the actual review data provided below. Do not invent any facts, checks, or details that are not in the data.
+
+PR Details:
+{json.dumps(pr_details, indent=2)}
+
+Synthesized Swarm Topology (Active Reviewers):
+{chr(10).join(reviewer_info)}
+
+Triage Result:
+{json.dumps(state.triage_result, indent=2)}
+
+Watchdog Anomalies:
+{json.dumps(state.watchdog_logs, indent=2)}
+
+Automated Verification Checks:
+{json.dumps(checks_performed, indent=2)}
+
+Debate Executive Summary & Rounds:
+{json.dumps(state.debate_summary, indent=2)}
+
+Instructions:
+1. Provide a clear title: "# 🛡️ WellActually.ai — JIT Swarm Governance Audit"
+2. Format the PR metadata (ID, status, resolution, files analyzed) at the top.
+3. List the JIT Synthesized Swarm Topology (Conductor, Coder, and the active reviewer agents).
+4. Provide the Compliance Triage status and list of required approvals.
+5. Create a dynamic "Code Verification Checks" markdown table listing ONLY the checks that were actually performed. Use "✅ Passed" or "❌ Failed" for status.
+6. Underneath the table, add section headers (e.g. "#### 📁 [Category] Violations") ONLY for checks that failed, and list the specific violations.
+7. Include the "Telemetry Watchdog Scanner" section and list any detected anomalies (if none, say "No anomalies detected").
+8. Include the "Consensus Debate History" section showing the rounds history and the executive summary.
+9. Keep it professional, structured, clean, and completely dynamic to this PR.
+10. Return ONLY the markdown text.
+"""
+    try:
+        messages = [
+            {"role": "system", "content": "You are a code governance markdown report generator. You format technical scorecards in clean, readable markdown."},
+            {"role": "user", "content": prompt}
+        ]
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=1500,
+            temperature=0.2,
+            timeout=15.0
+        )
+        md_content = response.choices[0].message.content.strip()
+        # Strip code block formatting if returned
+        if md_content.startswith("```"):
+            first_nl = md_content.find("\n")
+            last_code = md_content.rfind("```")
+            if first_nl != -1 and last_code != -1:
+                md_content = md_content[first_nl:last_code].strip()
+            if md_content.startswith("markdown"):
+                md_content = md_content[8:].strip()
+        return md_content
+    except Exception as e:
+        logger.error(f"Failed to generate LLM dynamic scorecard: {e}. Falling back to heuristic dynamic formatter.")
+        return build_heuristic_comment()
 
 
-# ── Bug 1 fix: contextual JIRA event based on PR title/files ──────────
-def generate_jira_context(pr_title: str, diff_files: List[str]) -> str:
-    """Generate a contextual JIRA ticket reference based on the PR's domain."""
-    title_lower = (pr_title or "").lower()
-    files_str = " ".join(f.lower() for f in diff_files)
-    combined = f"{title_lower} {files_str}"
 
-    if "billing" in combined or "spending" in combined:
-        return 'SEC-842: "Implement spending report fetcher. MUST use standard rbac.check_access() middleware."'
-    elif "auth" in combined or "oauth" in combined or "token" in combined or "login" in combined or "session" in combined:
-        return 'SEC-901: "Harden OAuth2 token lifecycle. Tokens MUST be hashed before storage; revoke requires ownership check."'
-    elif "checkout" in combined or "cart" in combined:
-        return 'CART-315: "Refactor checkout flow. cart_id MUST be validated against OpenAPI contract before payment dispatch."'
-    elif "gdpr" in combined or "export" in combined or "user_data" in combined or "user_queries" in combined or "permissions" in combined:
-        return 'PRIV-208: "GDPR data export endpoint. Ownership MUST be verified; PII columns MUST be filtered from export payload."'
-    elif "admin" in combined or "metrics" in combined or "dashboard" in combined:
-        return 'OPS-417: "Admin metrics dashboard. Queries MUST use LIMIT clauses; PII MUST NOT leak in aggregation responses."'
-    else:
-        return f'ENG-100: "Review changes in {diff_files[0] if diff_files else "unknown"}. Ensure compliance with project standards."'
 
 
 # ── Bug 2 fix: contextual watchdog anomaly based on PR domain ─────────
@@ -387,33 +488,33 @@ def predict_reviewer_identities(diff_files: List[str]) -> Tuple[Dict[str, str], 
 REVIEWER_SYSTEM_PROMPTS = {
     "billing": (
         "You are the Billing & Financial SME. Your primary concern is financial data integrity. "
-        "Audit all SQL queries touching billing_profiles, spending_limit_usd, and discount columns. "
-        "Verify that RBAC middleware (rbac.check_access) guards every financial data access path. "
-        "Flag any direct SELECT on sensitive monetary columns without access control."
+        "Audit SQL queries touching billing or monetary tables/columns. "
+        "Verify that proper access control policies and middleware guard every financial data access path. "
+        "Flag any direct access to sensitive monetary data without access control."
     ),
     "auth": (
         "You are the Auth & Security SME. Your primary concern is authentication and authorization integrity. "
-        "Audit token storage (must be hashed, never plaintext), session lifecycle (revocation must verify ownership), "
-        "and RBAC policy enforcement. Flag hardcoded secrets, missing ownership checks, and client-side role guards."
+        "Audit credentials storage (must be secure/hashed, never plaintext), session lifecycle (revocation must verify ownership), "
+        "and access policy enforcement. Flag hardcoded secrets, missing ownership checks, and client-side guards."
     ),
     "database": (
-        "You are the Database Schema Compliance SME. Your primary concern is schema correctness. "
-        "Cross-reference every SQL column in INSERT/SELECT/UPDATE against the Postgres schema. "
-        "Flag non-existent columns, SELECT * anti-patterns, and missing LIMIT on unbounded queries."
+        "You are the Database Schema Compliance SME. Your primary concern is database schema correctness. "
+        "Cross-reference SQL columns in queries against the database schema constraints. "
+        "Flag non-existent fields, SELECT * anti-patterns, and unbounded queries without a limit."
     ),
     "security": (
-        "You are the Environment Configuration Security SME. Your primary concern is secrets management. "
-        "Audit for hardcoded API keys, plaintext credentials, .env exposure, and missing encryption at rest."
+        "You are the Environment Configuration Security SME. Your primary concern is secrets management and security best practices. "
+        "Audit for hardcoded keys, plaintext credentials, configuration exposure, and missing encryption."
     ),
     "cart": (
         "You are the Cart & Order Integration SME. Your primary concern is API contract compliance. "
-        "Verify that all /api/v1/checkout calls match the OpenAPI contract schema. "
-        "Flag missing required fields (cart_id), payload mismatches, and missing idempotency keys."
+        "Verify that all checkout and cart integration payload schemas match the API contract specification. "
+        "Flag missing required fields, payload mismatches, and missing idempotency keys."
     ),
     "api": (
         "You are the API Contract & Integration SME. Your primary concern is REST endpoint correctness. "
-        "Verify endpoint paths, request/response schemas, and HTTP status codes match the OpenAPI contract. "
-        "Flag internal error details leaked to clients and missing input validation."
+        "Verify endpoint paths, request/response schemas, and HTTP status codes match the API contract. "
+        "Flag leaking internal error details to clients and missing input validation."
     ),
     "qa": (
         "You are the QA & Test Verification SME. Your primary concern is test coverage and correctness. "
@@ -462,23 +563,23 @@ def generate_dynamic_reviewers(diff_files: List[str], unique_suffix: str, limit:
         reviewers_info = [rev1_info, rev2_info]
     else:
         reviewers_info = predict_reviewer_identities_list(diff_files)
-        if limit is not None:
-            if len(reviewers_info) > limit:
-                reviewers_info = reviewers_info[:limit]
-            elif len(reviewers_info) < limit:
-                # Pad with default roles to reach exactly `limit`
-                defaults = [
-                    {"domain": "architecture", "role": "Code Architecture SME"},
-                    {"domain": "workflow", "role": "VCS Workflow Compliance SME"},
-                    {"domain": "documentation", "role": "Technical Writing SME"}
-                ]
-                for d in defaults:
-                    if len(reviewers_info) >= limit:
-                        break
-                    if not any(x["domain"] == d["domain"] for x in reviewers_info):
-                        reviewers_info.append(d)
-                while len(reviewers_info) < limit:
-                    reviewers_info.append({"domain": "architecture", "role": "Code Architecture SME"})
+        target_limit = limit if limit is not None else max(2, len(reviewers_info))
+        if len(reviewers_info) > target_limit:
+            reviewers_info = reviewers_info[:target_limit]
+        elif len(reviewers_info) < target_limit:
+            # Pad with default roles to reach exactly `target_limit`
+            defaults = [
+                {"domain": "architecture", "role": "Code Architecture SME"},
+                {"domain": "workflow", "role": "VCS Workflow Compliance SME"},
+                {"domain": "documentation", "role": "Technical Writing SME"}
+            ]
+            for d in defaults:
+                if len(reviewers_info) >= target_limit:
+                    break
+                if not any(x["domain"] == d["domain"] for x in reviewers_info):
+                    reviewers_info.append(d)
+            while len(reviewers_info) < target_limit:
+                reviewers_info.append({"domain": "architecture", "role": "Code Architecture SME"})
                 
     reviewers = []
     models = ["unsloth/Meta-Llama-3.1-8B-Instruct", "gpt-4o-mini", "unsloth/Meta-Llama-3.1-8B-Instruct"]
@@ -661,6 +762,8 @@ class SwarmState:
         self.reviewer_auth_domain = "auth"
         self.reviewer_cart_role = "Cart SME"
         self.reviewer_cart_domain = "cart"
+        self.model_preset = "hybrid"
+        self.model_assignments = {}
 
     def save_state(self):
         """Serializes the current SwarmState to a local mock database file."""
@@ -696,7 +799,9 @@ class SwarmState:
             "reviewer_auth_role": self.reviewer_auth_role,
             "reviewer_auth_domain": self.reviewer_auth_domain,
             "reviewer_cart_role": self.reviewer_cart_role,
-            "reviewer_cart_domain": self.reviewer_cart_domain
+            "reviewer_cart_domain": self.reviewer_cart_domain,
+            "model_preset": self.model_preset,
+            "model_assignments": self.model_assignments
         }
         try:
             os.makedirs("mock_infrastructure", exist_ok=True)
@@ -705,7 +810,7 @@ class SwarmState:
         except Exception as e:
             logger.error(f"Failed to save state to session_state.json: {e}")
 
-    def reset(self, scenario: str = "rbac_bypass", repo: Optional[str] = None, pr_number: Optional[int] = None):
+    def reset(self, scenario: str = "rbac_bypass", repo: Optional[str] = None, pr_number: Optional[int] = None, model_preset: Optional[str] = "hybrid", model_assignments: Optional[Dict[str, str]] = None):
         self.status = "IDLE"
         self.events = []
         self.active_agents = []
@@ -716,6 +821,8 @@ class SwarmState:
         self.pr_title = None
         self.pr_branch = None
         self.loaded_file_contents = {}
+        self.model_preset = model_preset or "hybrid"
+        self.model_assignments = model_assignments or {}
         if repo and pr_number:
             self.pr_id = f"PR-{pr_number}"
             self.diff_files = []
@@ -782,8 +889,8 @@ async def analyze_pr_for_swarm(pr_diff: str, pr_title: str, diff_files: List[str
     # If the API call fails or there is no client, we fallback to heuristic analysis.
     fallback_reviewers = []
     pred_list = predict_reviewer_identities_list(diff_files)
-    if len(pred_list) > 2:
-        pred_list = pred_list[:2]
+    if len(pred_list) > 4:
+        pred_list = pred_list[:4]
     elif len(pred_list) < 2:
         defaults = [
             {"domain": "architecture", "role": "Code Architecture SME"},
@@ -830,30 +937,26 @@ Files Touched: {json.dumps(diff_files)}
 PR Diff:
 {pr_diff}
 
-Synthesize a JIT (Just-in-Time) compliance swarm review configuration. Return ONLY a JSON object (no markdown, no backticks, no comments, just valid JSON).
+Synthesize a JIT (Just-in-Time) compliance swarm review configuration. Identify all relevant domains affected by this PR (e.g. database schema/SQL compliance, API contracts/payloads, authentication/security compliance, QA/testing, documentation, etc.) and generate a dedicated reviewer agent for each domain (generate between 2 to 4 reviewer agents depending on the size and complexity of the PR).
+Return ONLY a JSON object (no markdown, no backticks, no comments, just valid JSON).
 The JSON object must have exactly the following structure:
 {{
   "reviewers": [
     {{
       "role": "Role Title (e.g., Cryptographic Security SME, Regulatory Billing SME, API Schema Auditor)",
       "domain": "Domain key (one of: auth, billing, database, api, qa, documentation, security, architecture)",
-      "system_prompt": "Tailored prompt instructing this agent on what rules and constraints to audit in this specific PR diff",
-      "model": "unsloth/Meta-Llama-3.1-70B-Instruct" (for high stakes domain like billing/security/auth) or "gpt-4o-mini" (for other areas)
-    }},
-    {{
-      "role": "Second Role Title",
-      "domain": "Second Domain key",
-      "system_prompt": "Second tailored prompt",
-      "model": "gpt-4o-mini" or "unsloth/Meta-Llama-3.1-70B-Instruct"
+      "system_prompt": "Tailored prompt instructing this agent on what rules and constraints to audit in this specific PR diff. Focus strictly on the actual code, files, and domains present in this PR. Do NOT reference fictional 'MCP checks', 'MCP violations', or specific databases (like PostgreSQL) or spec formats (like OpenAPI) unless they are actually present in the PR code. The agent should be instructed to output its final review verdict as a valid JSON object matching the required schema.",
+      "model": "unsloth/Meta-Llama-3.1-8B-Instruct" (for high stakes domain like billing/security/auth) or "gpt-4o-mini" (for other areas)
     }}
+    // Add additional reviewer objects as needed (between 2 to 4 total reviewers)
   ],
   "additional_files": [
     "Any repository files that would be helpful to fetch as additional context for this PR (e.g., 'mock_infrastructure/postgres_schema.sql', 'mock_infrastructure/openapi_contract.json', 'mock_infrastructure/CODEOWNERS')"
   ],
   "mcp_targets": {{
-    "schema_table": "Postgres table name referenced in this PR (if any, e.g., 'billing_profiles', 'cart_items')",
-    "api_endpoint": "REST API endpoint path referenced in this PR (if any, e.g., '/api/v1/billing/spending')",
-    "rbac_target": "Sensitive column to enforce RBAC check on (if any, e.g., 'billing_profiles.spending_limit_usd')"
+    "schema_table": "Database table name referenced in this PR (if any, e.g., 'billing_profiles', 'cart_items')",
+    "api_endpoint": "API endpoint path referenced in this PR (if any, e.g., '/api/v1/billing/spending')",
+    "rbac_target": "Sensitive column to enforce access control check on (if any, e.g., 'billing_profiles.spending_limit_usd')"
   }}
 }}
 """
@@ -885,6 +988,107 @@ The JSON object must have exactly the following structure:
     except Exception as e:
         logger.error(f"[JIT ANALYSIS] LLM Swarm Synthesis failed: {e}. Falling back to heuristic defaults.")
         return fallback_res
+
+
+async def generate_debate_summary(events: List[Dict[str, Any]], status: str = "HALTED", resolution: str = "halted") -> str:
+    from src.swarm import client
+    if not client:
+        return "Offline/Fallback Mode: Summarization skipped."
+    
+    # Filter and format the debate messages
+    debate_log = []
+    for event in events:
+        sender = event.get("sender", "")
+        role = event.get("role", "")
+        msg = event.get("message", "")
+        # Skip system messages or very generic progress events
+        if sender == "SYSTEM" or role == "SYSTEM":
+            continue
+        if "Starting Adversarial Debate" in msg or "Consensus reached" in msg:
+            continue
+        
+        # Format the agent's message
+        debate_log.append(f"[{role} ({sender})]:\n{msg}\n---")
+    
+    if not debate_log:
+        return "No active debate messages recorded."
+    
+    debate_transcript = "\n".join(debate_log)
+    
+    prompt = f"""
+You are an expert AI Governance Auditor. Summarize the following adversarial code review debate transcript concisely.
+
+Final Simulation Outcome:
+- Simulation Status: {status}
+- Final Resolution Verdict: {resolution}
+
+Highlight:
+1. What the developer proposed and why it failed any initial compliance checks.
+2. The specific concerns/arguments raised by the security/database reviewers (e.g. SQL injection, PII leak, unbounded queries).
+3. The final resolution: explain whether the coder successfully resolved all concerns and the PR was approved, or if the PR was rejected/deadlocked (specifically referencing the final status '{status}' and resolution '{resolution}' and stating if any database schema/security issues remained unresolved causing final rejection).
+
+Keep the summary professional, executive-level, clear, and under 3-4 bullet points or a short paragraph. Do not mention system-level instructions or details.
+CRITICAL: The summary's conclusion MUST accurately reflect the Final Simulation Outcome. If the outcome is rejected/deadlocked/halted, do NOT state or imply that the revised code passed all compliance checks or was approved.
+
+Debate Transcript:
+{debate_transcript}
+"""
+    try:
+        def call_llm():
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a professional security and code quality analyst."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=400
+            )
+            return response.choices[0].message.content.strip()
+            
+        return await asyncio.to_thread(call_llm)
+    except Exception as e:
+        logger.error(f"Failed to generate LLM debate summary: {e}")
+        return "Failed to generate debate summary."
+
+
+async def generate_pr_summary(pr_diff: str, pr_title: str, diff_files: List[str]) -> str:
+    from src.swarm import client
+    import json
+    
+    if not pr_diff and "Refactor checkout flow" in pr_title:
+        return "This PR refactors the checkout flow database queries, modifying the order retrieval logic to enforce schema validation and query boundaries."
+        
+    if not client:
+        return f"Loaded PR: {pr_title} (modifying {', '.join(diff_files)})."
+    
+    prompt = f"""
+You are an expert code analyst. Synthesize a brief (2-3 sentences max) professional, executive-level summary of the following Pull Request:
+Title: {pr_title}
+Files Touched: {json.dumps(diff_files)}
+
+PR Diff:
+{pr_diff}
+
+Focus on what code changes are actually proposed. Keep it concise, clear, and direct.
+"""
+    try:
+        def call_llm():
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a professional code review analyst."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=250
+            )
+            return response.choices[0].message.content.strip()
+            
+        return await asyncio.to_thread(call_llm)
+    except Exception as e:
+        logger.error(f"Failed to generate PR summary: {e}")
+        return f"Loaded PR: {pr_title} (modifying {', '.join(diff_files)})."
 
 
 async def run_simulation_task():
@@ -925,20 +1129,19 @@ async def run_simulation_task():
         
     jit_config = None
     if state.scenario == "dynamic":
-        state.add_event("SYSTEM: Conductor analyzing PR details & diff for JIT Swarm Synthesis...", level="info")
+        state.add_event("Conductor analyzing PR details & diff for JIT Swarm Synthesis...", level="info")
         jit_config = await analyze_pr_for_swarm(state.pr_diff or "", state.pr_title or "", state.diff_files)
         
         # Load additional context files requested by LLM
         additional_files = jit_config.get("additional_files", [])
         if additional_files:
-            state.add_event(f"SYSTEM: Conductor identified additional context files to retrieve: {additional_files}", level="info")
+            state.add_event(f"Conductor identified additional context files to retrieve: {additional_files}", level="info")
             loaded_files = dict(state.loaded_file_contents) if state.loaded_file_contents else {}
             for filepath in additional_files:
                 if filepath not in loaded_files:
                     file_content = await get_github_file_content(state.repo or "vjb/WellActually.ai", filepath)
                     if file_content:
                         loaded_files[filepath] = file_content
-                        state.add_event(f"SYSTEM: Successfully retrieved context file: {filepath}", level="info")
             state.loaded_file_contents = loaded_files
             
         # Detect and merge MCP targets
@@ -951,20 +1154,15 @@ async def run_simulation_task():
         }
         state.save_state()
         
-    state.add_event("Modified files: " + str(state.diff_files), level="info")
+    # Generate and log PR Summary
+    try:
+        summary = await generate_pr_summary(state.pr_diff or "", state.pr_title or "", state.diff_files)
+        state.add_event(f"📝 [PR SUMMARY] {summary}", level="info")
+    except Exception as e:
+        logger.error(f"Error generating PR summary: {e}")
 
     # Bug 5: delay after PR loaded
     await asyncio.sleep(0.5)
-
-    # Bug 1 fix: contextual JIRA event based on PR domain
-    jira_ctx = generate_jira_context(state.pr_title or "", state.diff_files)
-    state.add_event(f'[JIRA INTEGRATION] Fetched context for Ticket {jira_ctx}', level="info")
-    
-    # Bug 5: delay after JIRA integration
-    await asyncio.sleep(0.4)
-
-    scenario_desc = SCENARIO_CONFIG.get(state.scenario, {}).get("description", "Dynamic PR review loaded from GitHub")
-    state.add_event(f"Scenario: {scenario_desc}", level="info")
     
     # 1. Triage compliance
     state.status = "TRIAGE"
@@ -1006,18 +1204,46 @@ async def run_simulation_task():
     # Bug 4 fix: recompute MCP targets now that diff_files are loaded
     if state.scenario == "dynamic" and state.repo and state.pr_number:
         fresh_mcp = detect_mcp_targets(state.diff_files, state.loaded_file_contents)
+        # Prevent fake/hallucinated JIT target overrides when actual code contains no such targets
+        if fresh_mcp["schema_table"] == "No database tables detected":
+            state.mcp_targets["schema_table"] = "No database tables detected"
+        if fresh_mcp["api_endpoint"] == "No API routes detected":
+            state.mcp_targets["api_endpoint"] = "No API routes detected"
         # Only override if we haven't already merged from JIT analysis above
-        if state.mcp_targets and all("No " in str(v) or v is None for v in state.mcp_targets.values()):
+        elif state.mcp_targets and all("No " in str(v) or v is None for v in state.mcp_targets.values()):
             state.mcp_targets = fresh_mcp
-            state.save_state()
+        state.save_state()
         
     # 3. Setup agents and run debate
     state.status = "RUNNING"
-    state.add_event("Initializing Band.ai remote agent credentials...", level="info")
     await asyncio.sleep(0.4)
     
     unique_suffix = session.unique_suffix
-    conductor = Agent(name=f"conductor-{unique_suffix}", role="Orchestrator", system_prompt="You are the Conductor orchestrating the debate.")
+    
+    # ── Swarm Model Routing Logic ────────────────────────────────────
+    conductor_model = "gpt-4o-mini"
+    coder_model = "gpt-4o-mini"
+    high_stakes_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
+    general_model = "gpt-4o-mini"
+    
+    if state.model_preset == "featherless":
+        conductor_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
+        coder_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
+        high_stakes_model = "unsloth/Meta-Llama-3.1-70B-Instruct"
+        general_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
+    elif state.model_preset == "aiml":
+        conductor_model = "gpt-4o-mini"
+        coder_model = "gpt-4o"
+        high_stakes_model = "gpt-4o"
+        general_model = "gpt-4o-mini"
+    elif state.model_preset == "custom":
+        custom_assigns = state.model_assignments or {}
+        conductor_model = custom_assigns.get("conductor", "gpt-4o-mini")
+        coder_model = custom_assigns.get("coder", "gpt-4o-mini")
+        high_stakes_model = custom_assigns.get("high_stakes", "unsloth/Meta-Llama-3.1-8B-Instruct")
+        general_model = custom_assigns.get("general", "gpt-4o-mini")
+        
+    conductor = Agent(name=f"conductor-{unique_suffix}", role="Orchestrator", system_prompt="You are the Conductor orchestrating the debate.", model=conductor_model)
     if state.scenario == "dynamic":
         file_contents_list = []
         for filepath in state.diff_files:
@@ -1027,41 +1253,70 @@ async def run_simulation_task():
         
         coder = CoderAgent(
             name_suffix=unique_suffix,
-            model="gpt-4o-mini",
+            model=coder_model,
             scenario="dynamic",
             pr_diff=state.pr_diff,
             file_contents=file_contents_str
         )
     else:
-        coder = CoderAgent(name_suffix=unique_suffix, model="gpt-4o-mini", scenario=state.scenario)
+        coder = CoderAgent(name_suffix=unique_suffix, model=coder_model, scenario=state.scenario)
         
     if state.scenario == "dynamic":
         if jit_config and "reviewers" in jit_config:
             reviewers = []
-            state.add_event("SYSTEM: Initializing synthesized JIT reviewer agents...", level="info")
             for idx, r_def in enumerate(jit_config["reviewers"]):
                 role = r_def.get("role", "Code Auditor")
                 domain = r_def.get("domain", "architecture")
                 system_prompt_override = r_def.get("system_prompt", "")
-                model = r_def.get("model", "gpt-4o-mini")
+                
+                # Determine reviewer model
+                if state.model_preset == "custom":
+                    custom_assigns = state.model_assignments or {}
+                    r_model = custom_assigns.get("high_stakes" if domain in ["auth", "database", "billing", "security"] else "general", "gpt-4o-mini")
+                elif state.model_preset == "featherless":
+                    r_model = "unsloth/Meta-Llama-3.1-70B-Instruct" if domain in ["auth", "database", "billing", "security"] else "unsloth/Meta-Llama-3.1-8B-Instruct"
+                elif state.model_preset == "aiml":
+                    r_model = "gpt-4o" if domain in ["auth", "database", "billing", "security"] else "gpt-4o-mini"
+                else: # "hybrid"
+                    r_model = r_def.get("model", "gpt-4o-mini")
+                    if domain in ["auth", "database", "billing", "security"] and r_model == "gpt-4o-mini":
+                        r_model = "unsloth/Meta-Llama-3.1-8B-Instruct"
                 
                 r_agent = ReviewerAgent(
                     role=role,
                     name_suffix=unique_suffix,
-                    model=model,
+                    model=r_model,
                     domain=domain,
                     system_prompt_override=system_prompt_override
                 )
                 reviewers.append(r_agent)
-                state.add_event(f"SYSTEM: Created synthesized agent '{role}' on model '{model}' for domain '{domain}'.", level="info")
         else:
             reviewers = generate_dynamic_reviewers(state.diff_files, unique_suffix, limit=None)
-            state.add_event("SYSTEM: Analyzing files to dynamically invent reviewer agent identities (fallback)...")
             for r in reviewers:
-                state.add_event(f"SYSTEM: Created agent '{r.role}' to verify compliance for files in domain '{r.domain}'.")
+                if state.model_preset == "custom":
+                    custom_assigns = state.model_assignments or {}
+                    r.model = custom_assigns.get("high_stakes" if r.domain in ["auth", "database", "billing", "security"] else "general", "gpt-4o-mini")
+                elif state.model_preset == "featherless":
+                    r.model = "unsloth/Meta-Llama-3.1-70B-Instruct" if r.domain in ["auth", "database", "billing", "security"] else "unsloth/Meta-Llama-3.1-8B-Instruct"
+                elif state.model_preset == "aiml":
+                    r.model = "gpt-4o" if r.domain in ["auth", "database", "billing", "security"] else "gpt-4o-mini"
     else:
-        reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-8B-Instruct", domain="auth")
-        reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model="gpt-4o-mini", domain="cart")
+        if state.model_preset == "custom":
+            custom_assigns = state.model_assignments or {}
+            model_auth = custom_assigns.get("high_stakes", "unsloth/Meta-Llama-3.1-8B-Instruct")
+            model_cart = custom_assigns.get("general", "gpt-4o-mini")
+        elif state.model_preset == "featherless":
+            model_auth = "unsloth/Meta-Llama-3.1-70B-Instruct"
+            model_cart = "unsloth/Meta-Llama-3.1-8B-Instruct"
+        elif state.model_preset == "aiml":
+            model_auth = "gpt-4o"
+            model_cart = "gpt-4o-mini"
+        else: # "hybrid"
+            model_auth = "unsloth/Meta-Llama-3.1-8B-Instruct"
+            model_cart = "gpt-4o-mini"
+            
+        reviewer_auth = ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model=model_auth, domain="auth")
+        reviewer_cart = ReviewerAgent(role="Cart SME", name_suffix=unique_suffix, model=model_cart, domain="cart")
         reviewers = [reviewer_auth, reviewer_cart]
         
     reviewer_auth = reviewers[0] if len(reviewers) > 0 else ReviewerAgent(role="Auth & Fraud SME", name_suffix=unique_suffix, model="unsloth/Meta-Llama-3.1-8B-Instruct", domain="auth")
@@ -1111,7 +1366,8 @@ async def run_simulation_task():
         state.save_state()
         
         MAX_ROUNDS = 2
-        for round_num in range(1, MAX_ROUNDS + 1):
+        round_num = 1
+        while round_num <= MAX_ROUNDS:
             state.consensus_round = round_num
             # Bug 5: delay before each debate round
             await asyncio.sleep(0.5)
@@ -1155,11 +1411,60 @@ async def run_simulation_task():
                 
                 # Wait for Human Consent Override
                 state.human_consent = None
+                state.compromise_prompt = None
                 pr_event = get_consent_event(state.pr_id)
                 pr_event.clear()
                 await pr_event.wait()
                 if is_stale():
                     return
+                
+                # Check if it was a compromise
+                if getattr(state, "compromise_prompt", None) and round_num <= 2:
+                    guideline = state.compromise_prompt
+                    state.add_event(f"Mediator compromise guidelines submitted: {guideline}", level="info")
+                    
+                    # 1. Save local memory
+                    path = "mock_infrastructure/local_memories.json"
+                    memories = []
+                    if os.path.exists(path):
+                        try:
+                            with open(path, "r", encoding="utf-8") as f:
+                                memories = json.load(f)
+                        except Exception:
+                            pass
+                    exists = any(m.get("content") == f"Compromise Guideline: {guideline}" for m in memories)
+                    if not exists:
+                        memories.append({
+                            "agent": "global_user",
+                            "content": f"Compromise Guideline: {guideline}",
+                            "type": "compromise_guideline",
+                            "metadata": {"type": "compromise_guideline"}
+                        })
+                        try:
+                            with open(path, "w", encoding="utf-8") as f:
+                                json.dump(memories, f, indent=2)
+                        except Exception:
+                            pass
+                    
+                    # 2. Try to save to Band API as global user memory
+                    if session.human_client:
+                        try:
+                            if hasattr(session.human_client, "human_api_memories") and hasattr(session.human_client.human_api_memories, "create_user_memory"):
+                                await session.human_client.human_api_memories.create_user_memory(content=f"Compromise Guideline: {guideline}")
+                        except Exception as e:
+                            logger.error(f"Failed to create user memory on Band API: {e}")
+                            
+                    # 3. Inject past ruling / compromise guideline into coder
+                    coder.system_prompt += f"\n\nCRITICAL compromise guidelines from mediator that you MUST follow:\n- {guideline}\n"
+                    
+                    # 4. Extend MAX_ROUNDS to 3 and ConsensusTracker max_rounds to 3
+                    MAX_ROUNDS = 3
+                    session.tracker.max_rounds = 3
+                    state.status = "RUNNING"
+                    state.add_event(f"Resuming debate. Mediator compromise guidelines injected: {guideline}", level="info")
+                    state.save_state()
+                    round_num += 1
+                    continue
                     
                 if state.human_consent:
                     state.status = "COMPLETED"
@@ -1178,6 +1483,8 @@ async def run_simulation_task():
                 state.add_event("✓ Swarm Consensus reached! Code compliance checks passed.", level="info")
                 state.save_state()
                 break
+            
+            round_num += 1
                 
         # Safety net: if loop exhausted without consensus, escalate to HALTED
         if state.status == "RUNNING":
@@ -1188,13 +1495,59 @@ async def run_simulation_task():
             
             # Wait for Human Consent Override
             state.human_consent = None
+            state.compromise_prompt = None
             pr_event = get_consent_event(state.pr_id)
             pr_event.clear()
             await pr_event.wait()
             if is_stale():
                 return
                 
-            if state.human_consent:
+            if getattr(state, "compromise_prompt", None) and round_num <= 2:
+                guideline = state.compromise_prompt
+                state.add_event(f"Mediator compromise guidelines submitted: {guideline}", level="info")
+                
+                # 1. Save local memory
+                path = "mock_infrastructure/local_memories.json"
+                memories = []
+                if os.path.exists(path):
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            memories = json.load(f)
+                    except Exception:
+                        pass
+                exists = any(m.get("content") == f"Compromise Guideline: {guideline}" for m in memories)
+                if not exists:
+                    memories.append({
+                        "agent": "global_user",
+                        "content": f"Compromise Guideline: {guideline}",
+                        "type": "compromise_guideline",
+                        "metadata": {"type": "compromise_guideline"}
+                    })
+                    try:
+                        with open(path, "w", encoding="utf-8") as f:
+                            json.dump(memories, f, indent=2)
+                    except Exception:
+                        pass
+                
+                # 2. Try to save to Band API as global user memory
+                if session.human_client:
+                    try:
+                        if hasattr(session.human_client, "human_api_memories") and hasattr(session.human_client.human_api_memories, "create_user_memory"):
+                            await session.human_client.human_api_memories.create_user_memory(content=f"Compromise Guideline: {guideline}")
+                    except Exception as e:
+                        logger.error(f"Failed to create user memory on Band API: {e}")
+                        
+                # 3. Inject past ruling / compromise guideline into coder
+                coder.system_prompt += f"\n\nCRITICAL compromise guidelines from mediator that you MUST follow:\n- {guideline}\n"
+                
+                # 4. Extend MAX_ROUNDS to 3 and ConsensusTracker max_rounds to 3
+                MAX_ROUNDS = 3
+                session.tracker.max_rounds = 3
+                state.status = "RUNNING"
+                state.add_event(f"Resuming debate. Mediator compromise guidelines injected: {guideline}", level="info")
+                state.save_state()
+                round_num += 1
+            elif state.human_consent:
                 state.status = "COMPLETED"
                 state.resolution_type = "human_override"
                 state.add_event("✓ Human Operator OVERRODE the deadlock and approved the PR.", level="info")
@@ -1209,16 +1562,31 @@ async def run_simulation_task():
         state.add_event("Zero-Fallback Mode Active. Crashed out directly on Band.ai platform limit.", level="error")
         state.save_state()
         # Ensure we run cleanup (which preserves reused agents keys)
-        await session.cleanup_agents(conductor, coder, [reviewer_auth, reviewer_cart])
+        await session.cleanup_agents(conductor, coder, reviewers)
         raise e
+    # Generate LLM debate summary
+    if state.debate_summary:
+        try:
+            state.add_event("Summarizing adversarial debate history via LLM...", level="info")
+            summary_text = await generate_debate_summary(state.events, state.status, state.resolution_type)
+            state.debate_summary["summary_text"] = summary_text
+            state.save_state()
+        except Exception as se:
+            logger.error(f"Failed to generate debate summary: {se}")
+
     # Post scorecard to GitHub PR
     try:
-        comment_body = format_scorecard_comment(state)
-        await asyncio.to_thread(post_github_pr_comment, state.pr_id, comment_body, state.repo)
+        comment_body = await format_scorecard_comment(state)
+        posted = await asyncio.to_thread(post_github_pr_comment, state.pr_id, comment_body, state.repo)
+        if posted:
+            state.add_event(f"✓ Successfully posted scorecard comment to GitHub {state.pr_id}.", level="info")
+        else:
+            state.add_event(f"⚠️ GitHub commenting skipped or failed. Check GH_TOKEN / GITHUB_REPO.", level="warning")
     except Exception as ge:
         logger.error(f"Failed to post GitHub PR comment: {ge}")
+        state.add_event(f"❌ Failed to post GitHub PR comment: {str(ge)}", level="error")
 
-    await session.cleanup_agents(conductor, coder, [reviewer_auth, reviewer_cart])
+    await session.cleanup_agents(conductor, coder, reviewers)
     state.save_state()
 
 
@@ -1249,7 +1617,9 @@ async def get_status():
         "reviewer_cart_domain": state.reviewer_cart_domain,
         "pr_title": state.pr_title,
         "pr_branch": state.pr_branch,
-        "active_agents": state.active_agents
+        "active_agents": state.active_agents,
+        "model_preset": state.model_preset,
+        "model_assignments": state.model_assignments
     }
 
 @app.get("/api/events")
@@ -1260,6 +1630,8 @@ class StartRequest(BaseModel):
     scenario: Optional[str] = "rbac_bypass"
     repo: Optional[str] = None
     pr_number: Optional[int] = None
+    model_preset: Optional[str] = "hybrid"
+    model_assignments: Optional[Dict[str, str]] = None
 
 @app.post("/api/start")
 async def start_simulation(background_tasks: BackgroundTasks, req: StartRequest = StartRequest()):
@@ -1273,18 +1645,171 @@ async def start_simulation(background_tasks: BackgroundTasks, req: StartRequest 
         elif scenario not in SCENARIO_CONFIG:
             raise HTTPException(status_code=400, detail=f"Unknown scenario: {scenario}. Choose from: {list(SCENARIO_CONFIG.keys())}")
             
-        state.reset(scenario=scenario, repo=req.repo, pr_number=req.pr_number)
+        state.reset(
+            scenario=scenario,
+            repo=req.repo,
+            pr_number=req.pr_number,
+            model_preset=req.model_preset,
+            model_assignments=req.model_assignments
+        )
         background_tasks.add_task(run_simulation_task)
         return {"status": "started", "scenario": scenario}
+
+class ConsentRequest(BaseModel):
+    approve: Optional[bool] = None
+    action: Optional[str] = None
+    compromise_prompt: Optional[str] = None
 
 @app.post("/api/consent")
 async def submit_consent(req: ConsentRequest):
     if state.status not in ["PENDING_HUMAN_APPROVAL", "HALTED", "RUNNING"]:
         raise HTTPException(status_code=400, detail=f"Cannot submit consent in state '{state.status}'.")
-    state.human_consent = req.approve
+    
+    action = req.action
+    if action is None:
+        if req.approve is True:
+            action = "approve"
+        elif req.approve is False:
+            action = "reject"
+            
+    if action == "approve":
+        state.human_consent = True
+        state.resolution_type = "human_override"
+        state.compromise_prompt = None
+    elif action == "reject":
+        state.human_consent = False
+        state.resolution_type = "halted"
+        state.compromise_prompt = None
+    elif action == "compromise":
+        state.human_consent = None
+        state.compromise_prompt = req.compromise_prompt
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+        
     state.save_state()
     get_consent_event(state.pr_id).set()  # Wake up any waiting coroutines
-    return {"status": "ok", "consent": req.approve}
+    return {"status": "ok", "consent": state.human_consent, "action": action}
+
+
+@app.post("/api/commit-fix")
+async def commit_fix():
+    from src.config import config
+    from src.swarm import post_github_pr_comment
+    import urllib.request
+    import urllib.error
+    import base64
+    import json
+
+    filepath = state.diff_files[0] if state.diff_files else "src/billing/spending_report.py"
+    proposed_code = state.current_code or ""
+    
+    repo = state.repo or config.get("GITHUB_REPO") or "vjb/WellActually.ai"
+    pr_number = state.pr_number or 217
+    
+    feedback_branch = f"wellactually/feedback-pr-{pr_number}"
+    
+    state.add_event(f"Initiating safe commit flow for PR #{pr_number}...", level="info")
+    
+    gh_token = config.get("GH_TOKEN")
+    if not gh_token:
+        state.add_event(f"[Mock] Pushed changes to branch: {feedback_branch}", level="info")
+        state.add_event(f"[Mock] Created suggestion comment on PR #{pr_number}", level="info")
+        state.save_state()
+        return {"status": "success", "message": "Mock commit flow completed successfully (no GH_TOKEN)"}
+        
+    headers = {
+        "Authorization": f"Bearer {gh_token}",
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "WellActually-App",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        pr_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
+        pr_req = urllib.request.Request(pr_url, headers=headers)
+        
+        def fetch_pr():
+            with urllib.request.urlopen(pr_req, timeout=10) as response:
+                return json.loads(response.read().decode("utf-8"))
+                
+        pr_data = await asyncio.to_thread(fetch_pr)
+        base_sha = pr_data.get("head", {}).get("sha")
+        if not base_sha:
+            raise Exception("Could not retrieve head SHA for the PR.")
+            
+        ref_url = f"https://api.github.com/repos/{repo}/git/refs"
+        ref_payload = {
+            "ref": f"refs/heads/{feedback_branch}",
+            "sha": base_sha
+        }
+        ref_req = urllib.request.Request(ref_url, data=json.dumps(ref_payload).encode("utf-8"), headers=headers, method="POST")
+        
+        def create_ref():
+            try:
+                with urllib.request.urlopen(ref_req, timeout=10) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as he:
+                if he.code == 422:
+                    logger.info(f"Branch {feedback_branch} already exists.")
+                    return None
+                raise he
+                
+        await asyncio.to_thread(create_ref)
+        state.add_event(f"Created feedback branch: {feedback_branch}", level="info")
+        
+        file_url = f"https://api.github.com/repos/{repo}/contents/{filepath}?ref={feedback_branch}"
+        file_req = urllib.request.Request(file_url, headers=headers)
+        
+        def fetch_file_sha():
+            try:
+                with urllib.request.urlopen(file_req, timeout=10) as response:
+                    res = json.loads(response.read().decode("utf-8"))
+                    return res.get("sha")
+            except urllib.error.HTTPError as he:
+                if he.code == 404:
+                    return None
+                raise he
+                
+        file_sha = await asyncio.to_thread(fetch_file_sha)
+        
+        commit_url = f"https://api.github.com/repos/{repo}/contents/{filepath}"
+        commit_payload = {
+            "message": f"Apply swarm fix suggestion for PR #{pr_number}",
+            "content": base64.b64encode(proposed_code.encode("utf-8")).decode("utf-8"),
+            "branch": feedback_branch
+        }
+        if file_sha:
+            commit_payload["sha"] = file_sha
+            
+        commit_req = urllib.request.Request(commit_url, data=json.dumps(commit_payload).encode("utf-8"), headers=headers, method="PUT")
+        
+        def commit_file():
+            with urllib.request.urlopen(commit_req, timeout=10) as response:
+                return json.loads(response.read().decode("utf-8"))
+                
+        await asyncio.to_thread(commit_file)
+        state.add_event(f"Pushed proposed fix to branch {feedback_branch}", level="info")
+        
+        comment_body = (
+            f"🛡️ **WellActually.ai Swarm Fix Suggestion**\n\n"
+            f"We have pushed the proposed fix to the dedicated feedback branch: `{feedback_branch}`.\n\n"
+            f"You can review the suggestion below:\n\n"
+            f"```suggestion\n{proposed_code}\n```"
+        )
+        posted = post_github_pr_comment(state.pr_id, comment_body, repo=repo)
+        if posted:
+            state.add_event(f"Successfully posted suggestion comment to PR #{pr_number}", level="info")
+        else:
+            state.add_event(f"Failed to post suggestion comment to PR #{pr_number}", level="warning")
+            
+        state.save_state()
+        return {"status": "success", "message": f"Successfully committed fix to branch {feedback_branch}"}
+        
+    except Exception as err:
+        logger.error(f"Failed to execute safe commit flow: {err}")
+        state.add_event(f"❌ Failed to execute safe commit flow: {str(err)}", level="error")
+        state.save_state()
+        raise HTTPException(status_code=500, detail=str(err))
 
 @app.post("/api/reset")
 async def reset_state():
@@ -1352,21 +1877,41 @@ async def get_github_pr_details_internal(repo: str, number: int) -> Dict[str, An
             
         return details, diff_files, diff_text
         
-    details, diff_files, diff_text = await asyncio.to_thread(fetch)
-    rev1, rev2 = predict_reviewer_identities(diff_files)
-    pred_list = predict_reviewer_identities_list(diff_files)
-    return {
-        "number": details.get("number"),
-        "title": details.get("title"),
-        "body": details.get("body"),
-        "state": details.get("state"),
-        "diff_files": diff_files,
-        "diff": diff_text,
-        "branch": details.get("head", {}).get("ref", f"github/pr-{number}"),
-        "predicted_reviewer_auth": rev1,
-        "predicted_reviewer_cart": rev2,
-        "predicted_reviewers": pred_list
-    }
+    try:
+        details, diff_files, diff_text = await asyncio.to_thread(fetch)
+        rev1, rev2 = predict_reviewer_identities(diff_files)
+        pred_list = predict_reviewer_identities_list(diff_files)
+        return {
+            "number": details.get("number"),
+            "title": details.get("title"),
+            "body": details.get("body"),
+            "state": details.get("state"),
+            "diff_files": diff_files,
+            "diff": diff_text,
+            "branch": details.get("head", {}).get("ref", f"github/pr-{number}"),
+            "predicted_reviewer_auth": rev1,
+            "predicted_reviewer_cart": rev2,
+            "predicted_reviewers": pred_list
+        }
+    except Exception as e:
+        if repo.lower() == "vjb/wellactually.ai":
+            logger.warning(f"GitHub API unreachable for repo {repo} PR #{number}: {e}. Falling back to mock PR catalog.")
+            pr_data = get_mock_pr_data(number)
+            rev1, rev2 = predict_reviewer_identities(pr_data["diff_files"])
+            pred_list = predict_reviewer_identities_list(pr_data["diff_files"])
+            return {
+                "number": number,
+                "title": pr_data["title"],
+                "body": pr_data["body"],
+                "state": pr_data["state"],
+                "diff_files": pr_data["diff_files"],
+                "diff": pr_data["diff"],
+                "branch": pr_data["branch"],
+                "predicted_reviewer_auth": rev1,
+                "predicted_reviewer_cart": rev2,
+                "predicted_reviewers": pred_list
+            }
+        raise e
 
 
 async def get_github_file_content(repo: str, filepath: str) -> str:
@@ -1426,8 +1971,8 @@ async def get_github_file_content(repo: str, filepath: str) -> str:
 # provide a compelling demo experience out-of-the-box.
 
 MOCK_PR_CATALOG = {
-    2: {
-        "number": 2,
+    217: {
+        "number": 217,
         "title": "Implement spending report fetcher endpoint",
         "body": "Implements spending report retrieval for billing profiles. Queries billing_profiles for spending_limit_usd and discount_tier.",
         "state": "open",
@@ -1512,8 +2057,8 @@ index 0000000..d4e5f6a
             "src/auth/session_manager.py": ""
         }
     },
-    4: {
-        "number": 4,
+    104: {
+        "number": 104,
         "title": "Refactor checkout flow and update cart API contracts",
         "body": "Refactors checkout logic to support discount codes and multi-currency. Updates the /api/v1/checkout endpoint contract to include new fields.",
         "state": "open",
@@ -1700,11 +2245,15 @@ index 0000000..d1e2f3a
 
 
 def get_mock_pr_data(number: int) -> Dict[str, Any]:
-    """Return mock PR data by number, falling back to PR #2 for unknown numbers."""
-    if number in MOCK_PR_CATALOG:
-        return MOCK_PR_CATALOG[number]
-    # Default fallback
-    return MOCK_PR_CATALOG[2]
+    """Return mock PR data by number, falling back to PR #217 for unknown numbers."""
+    target_number = number
+    if target_number in MOCK_PR_CATALOG:
+        pr = MOCK_PR_CATALOG[target_number].copy()
+    else:
+        # Default fallback
+        pr = MOCK_PR_CATALOG[217].copy()
+    pr["number"] = number
+    return pr
 
 
 def get_mock_pr_list() -> list:
@@ -1781,7 +2330,30 @@ async def get_github_pr_details(repo: str, number: int):
 
 
 @app.post("/api/webhooks/github")
-async def github_webhook(payload: Dict[str, Any], background_tasks: BackgroundTasks):
+async def github_webhook(request: Request, background_tasks: BackgroundTasks):
+    # Retrieve raw body to verify signature
+    body_bytes = await request.body()
+    
+    # Check signature if secret is configured
+    from src.config import config
+    secret = config.get("GH_WEBHOOK_SECRET")
+    if secret:
+        sig_header = request.headers.get("X-Hub-Signature-256")
+        if not sig_header:
+            raise HTTPException(status_code=400, detail="Missing X-Hub-Signature-256 header")
+        
+        import hmac
+        import hashlib
+        expected_sig = "sha256=" + hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig_header, expected_sig):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+            
+    # Parse payload
+    try:
+        payload = json.loads(body_bytes.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid JSON body")
+        
     action = payload.get("action")
     pr = payload.get("pull_request")
     if not pr:
@@ -1798,3 +2370,52 @@ async def github_webhook(payload: Dict[str, Any], background_tasks: BackgroundTa
         background_tasks.add_task(run_simulation_task)
         
     return {"status": "triggered", "repo": repo, "pr_number": pr_number}
+
+
+@app.get("/api/memories")
+async def list_memories():
+    api_key = os.getenv("BAND_API_KEY")
+    base_url = os.getenv("BAND_REST_URL", "https://app.band.ai")
+    if not api_key:
+        return []
+    import thenvoi_rest
+    client = thenvoi_rest.AsyncRestClient(api_key=api_key, base_url=base_url)
+    try:
+        res = await client.human_api_memories.list_user_memories()
+        memories = []
+        for m in getattr(res, "data", []) or []:
+            memories.append({
+                "id": getattr(m, "id", ""),
+                "content": getattr(m, "content", ""),
+                "agent": getattr(m, "agent_id", "User"),
+                "type": getattr(m, "type", "episodic")
+            })
+        return memories
+    except Exception as e:
+        logger.error(f"Failed to list user memories from Band API: {e}")
+        return []
+
+
+@app.post("/api/memories/archive")
+async def archive_memory(payload: Dict[str, Any]):
+    memory_id = payload.get("id")
+    if not memory_id:
+        raise HTTPException(status_code=400, detail="Missing memory ID")
+    api_key = os.getenv("BAND_API_KEY")
+    base_url = os.getenv("BAND_REST_URL", "https://app.band.ai")
+    if not api_key:
+        return {"status": "ok", "message": "Mock archive successful"}
+    import thenvoi_rest
+    client = thenvoi_rest.AsyncRestClient(api_key=api_key, base_url=base_url)
+    try:
+        await client.human_api_memories.archive_user_memory(memory_id=memory_id)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Failed to archive memory {memory_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/report")
+async def get_report():
+    """Returns a simple report status for testing."""
+    return {"status": "ok", "report": "Consensus reached successfully."}

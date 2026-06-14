@@ -165,31 +165,6 @@ async def test_aiml(api_key: str) -> bool:
             logger.exception(f"✗ AIML API request raised exception: {e}")
             return False
 
-async def test_featherless(api_key: str) -> bool:
-    logger.info("Testing Featherless API connectivity...")
-    if not api_key:
-        logger.error("Featherless API key is missing.")
-        return False
-
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                "https://api.featherless.ai/v1/models",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                },
-                timeout=15.0,
-            )
-            if response.status_code == 200:
-                logger.info("✓ Featherless API key is VALID.")
-                return True
-            else:
-                logger.error(f"✗ Featherless API check failed: HTTP {response.status_code} - {response.text.strip()}")
-                return False
-        except Exception as e:
-            logger.exception(f"✗ Featherless API request raised exception: {e}")
-            return False
-
 
 async def main():
     logger.info("Loading environment configuration...")
@@ -200,20 +175,17 @@ async def main():
     band_key = config.get("BAND_API_KEY")
     github_token = config.get("GH_TOKEN")
     aiml_key = config.get("AIML_API_KEY")
-    featherless_key = config.get("FEATHERLESS_API_KEY")
     
     # Resolve the band REST URL, falling back to codeband.yaml settings if defined
     band_rest_url = config.get("BAND_REST_URL", yaml_path="band.rest_url", default="https://app.band.ai")
     
-    # Map tasks to run concurrently
-    services = ["Anthropic", "OpenAI", "GitHub", "Band.ai", "AIML API", "Featherless"]
+    services = ["Anthropic", "OpenAI", "GitHub", "Band.ai", "AIML API"]
     tasks = [
         test_anthropic(anthropic_key),
         test_openai(openai_key),
         test_github(github_token),
         test_band(band_key, band_rest_url),
-        test_aiml(aiml_key),
-        test_featherless(featherless_key)
+        test_aiml(aiml_key)
     ]
     
     logger.info("Executing all checks concurrently...")
@@ -223,7 +195,7 @@ async def main():
     print("=" * 60)
     
     logger.info("VERIFICATION SUMMARY:")
-    required_services = {"Band.ai", "AIML API", "Featherless"}
+    required_services = {"Band.ai", "AIML API"}
     required_failed = []
     optional_failed = []
     

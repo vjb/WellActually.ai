@@ -31,13 +31,12 @@ To prevent **false positives** (a primary pain point of traditional static analy
 
 The system operates in a multi-phase, isolated loop to prevent context pollution and ensure rigorous review standards.
 
-1. **Task Ingestion & Triage:** A task or Pull Request is initialized. The **Conductor** evaluates the Git diff and original Jira requirements. It triggers the `CodeownersTriage` module to determine the risk level of the modified files.
-2. **JIRA Integration Context**: The system injects a JIRA ground-truth event message to guide the Coder and Reviewers on security requirements (e.g. enforcing standard RBAC middleware).
-3. **Adversarial Execution:** The native `codeband` **Coders** spin up completely isolated local Git worktrees. The Coder agent receives **stale documentation** listing deprecated columns as valid, causing **emergent non-compliance** rather than scripted failures.
-4. **Bounded Context Review (Split MCP):** The code is routed to **domain-differentiated Reviewers**. The **Auth & Fraud SME** receives only schema + RBAC context and validates SQL compliance and role-based access. The **Cart SME** receives only OpenAPI context and validates API contract compliance. Each reviewer operates with isolated, domain-specific prompts — no shared context.
-5. **Governance Oversight & Consensus**: As the Coder and Reviewer debate the implementation, the custom `ConsensusTracker` monitors the Band room with **per-reviewer vote tracking** via `record_vote()` and `get_summary()`. If they fail to reach an agreement within the designated 2-round threshold, the automated flow is halted.
-6. **Observability Injection**: Simultaneously, the `ObservabilityAgent` daemon scans live system telemetry, injecting warnings directly into the activity feed if the modified endpoints correspond with known historical regressions (e.g., query loops on the billing service).
-7. **Human-in-the-Loop Rejection**: The human operator reviews the deadlocked debate and clicks **Reject PR**, terminating the review and logging: `❌ Human Operator agreed with SME and REJECTED the PR.`
+1. **Task Ingestion & Triage:** A task or Pull Request is initialized. The **Conductor** evaluates the Git diff. It triggers the `CodeownersTriage` module to determine the risk level of the modified files.
+2. **Adversarial Execution:** The native `codeband` **Coders** spin up completely isolated local Git worktrees. The Coder agent receives **stale documentation** listing deprecated columns as valid, causing **emergent non-compliance** rather than scripted failures.
+3. **Bounded Context Review (Split MCP):** The code is routed to **domain-differentiated Reviewers**. The **Auth & Fraud SME** receives only schema + RBAC context and validates SQL compliance and role-based access. The **Cart SME** receives only OpenAPI context and validates API contract compliance. Each reviewer operates with isolated, domain-specific prompts — no shared context.
+4. **Governance Oversight & Consensus**: As the Coder and Reviewer debate the implementation, the custom `ConsensusTracker` monitors the Band room with **per-reviewer vote tracking** via `record_vote()` and `get_summary()`. If they fail to reach an agreement within the designated 2-round threshold, the automated flow is halted.
+5. **Observability Injection**: Simultaneously, the `ObservabilityAgent` daemon scans live system telemetry, injecting warnings directly into the activity feed if the modified endpoints correspond with known historical regressions (e.g., query loops on the billing service).
+6. **Human-in-the-Loop Rejection**: The human operator reviews the deadlocked debate and clicks **Reject PR**, terminating the review and logging: `❌ Human Operator agreed with SME and REJECTED the PR.`
 
 ---
 

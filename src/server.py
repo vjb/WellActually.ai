@@ -27,26 +27,43 @@ async def format_scorecard_comment(state) -> str:
         if agent.get("id", "").startswith("reviewer"):
             reviewer_info.append(f"- **{agent.get('role')}** (Domain: `{agent.get('domain')}`): `{agent.get('model')}`")
 
-    # Gather any check details
+    # Gather any check details with relevance filtering
+    code = getattr(state, "current_code", None)
+    if code is None:
+        has_db = True
+        has_api = True
+        has_rbac = True
+    else:
+        code_lower = str(code).lower()
+        has_db = "select " in code_lower or "insert " in code_lower or "update " in code_lower or "delete " in code_lower or "db." in code_lower
+        has_api = "route" in code_lower or "api" in code_lower or "request" in code_lower or "flask" in code_lower or "fastapi" in code_lower or "client" in code_lower
+        has_rbac = "role" in code_lower or "rbac" in code_lower or "permission" in code_lower or "authoriz" in code_lower or "@requires_role" in code_lower
+
     checks_performed = []
-    if state.schema_check:
-        checks_performed.append({
-            "name": "Database Schema Integrity",
-            "compliant": state.schema_check.get("compliant", False),
-            "violations": state.schema_check.get("violations", [])
-        })
-    if state.openapi_check:
-        checks_performed.append({
-            "name": "API Contract Compliance",
-            "compliant": state.openapi_check.get("compliant", False),
-            "violations": state.openapi_check.get("violations", [])
-        })
-    if state.rbac_check:
-        checks_performed.append({
-            "name": "Access Control Policy Verification",
-            "compliant": state.rbac_check.get("compliant", False),
-            "violations": state.rbac_check.get("violations", [])
-        })
+    if getattr(state, "schema_check", None):
+        is_relevant = has_db or not state.schema_check.get("compliant", True)
+        if is_relevant:
+            checks_performed.append({
+                "name": "Database Schema Integrity",
+                "compliant": state.schema_check.get("compliant", False),
+                "violations": state.schema_check.get("violations", [])
+            })
+    if getattr(state, "openapi_check", None):
+        is_relevant = has_api or not state.openapi_check.get("compliant", True)
+        if is_relevant:
+            checks_performed.append({
+                "name": "API Contract Compliance",
+                "compliant": state.openapi_check.get("compliant", False),
+                "violations": state.openapi_check.get("violations", [])
+            })
+    if getattr(state, "rbac_check", None):
+        is_relevant = has_rbac or not state.rbac_check.get("compliant", True)
+        if is_relevant:
+            checks_performed.append({
+                "name": "Access Control Policy Verification",
+                "compliant": state.rbac_check.get("compliant", False),
+                "violations": state.rbac_check.get("violations", [])
+            })
 
     # Prepare inputs for the LLM
     pr_details = {
